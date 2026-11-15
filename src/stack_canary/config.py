@@ -9,8 +9,8 @@ from pathlib import Path
 class Settings:
     repeats: int = 3
     results_dir: str = "results"
-    deadline_s: float = 2.0
-    stall_s: float = 1.5
+    deadline_s: float = 120
+    stall_s: float = 30
     thinking_models: tuple[str, ...] = ()
 
 

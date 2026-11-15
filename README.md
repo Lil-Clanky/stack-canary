@@ -37,7 +37,7 @@ to change the run. To exercise a failure, use a fault model such as
 
 Copy `canary.toml.example` to `canary.toml` to configure the default attempt
 count, output directory, deadlines, stall timeout, and thinking-capable
-models. The defaults are a two-second deadline and a 1.5-second stall timeout.
+models. The defaults are a 120-second deadline and a 30-second stall timeout.
 Explicit command-line settings take precedence.
 
 Each run writes a UTC-stamped `results/*_endpoint.json` by default. It records

@@ -1,6 +1,6 @@
 # Copy to canary.toml to customize the phase 2 run defaults.
 repeats = 3
 results_dir = "results"
-deadline_s = 2.0
-stall_s = 1.5
+deadline_s = 120
+stall_s = 30
 thinking_models = []

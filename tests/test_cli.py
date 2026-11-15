@@ -7,6 +7,25 @@ import fake_ollama
 from fake_ollama import FakeOllama, running
 from stack_canary import __version__
 from stack_canary.cli import main
+from stack_canary.config import Settings
+
+
+@pytest.fixture(autouse=True)
+def short_timeouts(monkeypatch):
+    from stack_canary import config
+
+    def load_short(path=Path("canary.toml")):
+        if path.exists():
+            return original_load(path)
+        return Settings(deadline_s=2, stall_s=0.5)
+
+    original_load = config.load
+    monkeypatch.setattr(config, "load", load_short)
+
+
+def test_default_timeouts():
+    settings = Settings()
+    assert (settings.deadline_s, settings.stall_s) == (120, 30)
 
 
 def test_run_defaults_and_result_schema(tmp_path, monkeypatch, capsys):
