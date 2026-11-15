@@ -238,6 +238,49 @@ def test_clone_fallback_replaces_without_sharing(home, settings):
     assert not list((home / "stores").glob(".clone-*"))
 
 
+def test_clone_preserves_internal_manifest_link(home, settings):
+    master = home / "stores/master"
+    manifest = master / "manifests-v2/ollama.com/library/x/latest"
+    blob = master / "blobs/sha256-test"
+    manifest.parent.mkdir(parents=True)
+    blob.parent.mkdir()
+    blob.write_text("master")
+    try:
+        manifest.symlink_to("../../../../blobs/sha256-test")
+    except OSError:
+        if os.name == "nt":
+            pytest.skip("file symlinks require Windows symlink privileges")
+        raise
+
+    clone = OllamaRuntime(home, settings).clone_store("1.10.0")
+    cloned_manifest = clone / manifest.relative_to(master)
+    cloned_blob = clone / blob.relative_to(master)
+    assert cloned_manifest.is_symlink()
+    assert cloned_manifest.resolve() == cloned_blob
+    cloned_blob.write_text("clone")
+    assert cloned_manifest.read_text() == "clone"
+    assert manifest.read_text() == "master"
+
+
+def test_clone_refuses_store_link_to_sibling(home, settings):
+    master = home / "stores/master"
+    sibling = master.parent / "sibling"
+    master.mkdir(parents=True)
+    sibling.mkdir()
+    link = master / "outside"
+    try:
+        link.symlink_to("../sibling", target_is_directory=True)
+    except OSError:
+        if os.name != "nt":
+            raise
+        import _winapi
+
+        _winapi.CreateJunction(str(sibling), str(link))
+    with pytest.raises(ValueError, match="outside the canary home"):
+        OllamaRuntime(home, settings).clone_store("1.10.0")
+    assert not (master.parent / "ollama-1.10.0").exists()
+
+
 def test_apfs_failure_does_not_fall_back(home, settings, monkeypatch):
     runtime = OllamaRuntime(home, replace(settings, allow_full_copy=False))
     (home / "stores/master").mkdir(parents=True)

@@ -152,7 +152,7 @@ def _clone_tree(source: Path, destination: Path) -> None:
             error = ctypes.get_errno()
             raise OSError(error, os.strerror(error), src, None, dst)
 
-    shutil.copytree(source, destination, copy_function=clone_file)
+    shutil.copytree(source, destination, copy_function=clone_file, symlinks=True)
 
 
 def _validate_port(port: int) -> None:
@@ -575,8 +575,13 @@ class OllamaRuntime:
         for directory, subdirs, files in os.walk(master):
             for name in subdirs + files:
                 item = Path(directory) / name
-                if safe_path(master, item) != item or item.is_symlink():
-                    raise ValueError(f"model stores cannot contain links: {item}")
+                target = safe_path(master, item)
+                if item.is_symlink():
+                    if Path(os.readlink(item)).anchor or not target.is_file():
+                        raise ValueError(f"model store link must be relative and target a file: {item}")
+                    continue
+                if target != item:
+                    raise ValueError(f"model stores cannot contain junctions: {item}")
                 if name in files:
                     info = item.stat()
                     if not stat.S_ISREG(info.st_mode):
@@ -589,7 +594,7 @@ class OllamaRuntime:
         clone = safe_path(self.root, staging / "store")
         try:
             if use_full_copy:
-                shutil.copytree(master, clone)
+                shutil.copytree(master, clone, symlinks=True)
             else:
                 try:
                     _clone_tree(master, clone)
