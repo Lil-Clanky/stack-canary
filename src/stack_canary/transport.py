@@ -6,6 +6,7 @@ import json
 import math
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -120,13 +121,25 @@ def parse_json(data: str | bytes) -> object:
     return json.loads(data, parse_constant=_nonfinite)
 
 
-def _capture_line(exchange: Exchange, raw: bytes, started: float) -> None:
+def _capture_line(
+    exchange: Exchange, raw: bytes, started: float, *,
+    ndjson: bool, complete: bool, on_line: Callable[[object], None] | None,
+) -> None:
     line = raw.decode("utf-8", errors="surrogateescape")
     exchange.response.lines.append({"elapsed_s": time.monotonic() - started, "line": line})
     # An unterminated line can be captured after an EOF or a timeout.
     if exchange.done or exchange.error == "http_error":
         return
-    if not raw.endswith(b"\n") or not raw.startswith(b"data:"):
+    if not complete:
+        return
+    if ndjson:
+        if raw.strip():
+            payload = parse_json(raw)
+            exchange.chunks.append(payload)
+            if on_line is not None:
+                on_line(payload)
+        return
+    if not raw.startswith(b"data:"):
         return
     data = raw[5:].removeprefix(b" ").rstrip(b"\r\n")
     if data == b"[DONE]":
@@ -143,8 +156,13 @@ def request(
     deadline_s: float,
     stall_s: float,
     sse: bool = False,
+    ndjson: bool = False,
+    on_line: Callable[[object], None] | None = None,
 ) -> Exchange:
-    """Make one request and retain the response entity or timestamped SSE lines."""
+    """Retain the response entity or timestamped SSE/NDJSON lines."""
+    if sse and ndjson or on_line is not None and not ndjson:
+        raise ValueError("select one stream protocol and use on_line only with NDJSON")
+    streaming = sse or ndjson
     if not all(math.isfinite(value) and value > 0 for value in (deadline_s, stall_s)):
         raise ValueError("timeouts must be positive and finite")
     port, target = loopback_url(url)
@@ -154,7 +172,7 @@ def request(
     headers = {
         "Host": f"{urlsplit(url).hostname}:{port}",
         "Accept-Encoding": "identity",
-        "Accept": "text/event-stream" if sse else "application/json",
+        "Accept": "text/event-stream" if sse else "application/x-ndjson" if ndjson else "application/json",
         "Connection": "close",
     }
     if encoded is not None:
@@ -169,7 +187,7 @@ def request(
             "headers": headers,
             "body": None if encoded is None else encoded.decode("ascii"),
         },
-        response=ResponseCapture(lines=[] if sse else None),
+        response=ResponseCapture(lines=[] if streaming else None),
     )
     body_bytes = bytearray()
     pending = bytearray()
@@ -194,18 +212,22 @@ def request(
                 if response.length:
                     exchange.error = exchange.error or "connection_error"
                 break
-            if sse:
+            if streaming:
                 pending.extend(received)
                 while (line_end := pending.find(b"\n")) >= 0:
                     line = bytes(pending[:line_end + 1])
                     del pending[:line_end + 1]
                     try:
-                        _capture_line(exchange, line, started)
+                        _capture_line(exchange, line, started, ndjson=ndjson, complete=True, on_line=on_line)
                     except (ValueError, RecursionError):
                         exchange.error = "bad_json"
             else:
                 body_bytes.extend(received)
-        if not sse and exchange.error is None:
+        if ndjson and pending and exchange.error is None:
+            line = bytes(pending)
+            pending.clear()
+            _capture_line(exchange, line, started, ndjson=True, complete=True, on_line=on_line)
+        if not streaming and exchange.error is None:
             exchange.payload = parse_json(bytes(body_bytes))
     except _DeadlineExpired:
         exchange.error = "timeout_deadline"
@@ -220,9 +242,9 @@ def request(
             response.close()
         if connection is not None:
             connection.close()
-        if sse and pending:
-            _capture_line(exchange, bytes(pending), started)
-        if not sse:
+        if streaming and pending:
+            _capture_line(exchange, bytes(pending), started, ndjson=ndjson, complete=False, on_line=None)
+        if not streaming:
             exchange.response.body = body_bytes.decode("utf-8", errors="surrogateescape")
         exchange.elapsed_s = time.monotonic() - started
     return exchange

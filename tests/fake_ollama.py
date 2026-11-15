@@ -3,25 +3,33 @@
 import argparse
 import hashlib
 import json
+import os
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Event, Lock, Thread
 
 MODES = (
     "ok", "hang_before_headers", "stall_mid_stream", "slow_drip", "no_done",
     "single_chunk", "leak_tool_markup", "bad_tool_args", "split_tool_args",
-    "http_500", "flaky",
+    "http_500", "flaky", "cpu_fallback", "pull_error",
 )
 MODELS = ("a", "b", *(f"fake:{mode}" for mode in MODES))
 
 
 class FakeOllama(ThreadingHTTPServer):
-    def __init__(self, port: int = 0, mode: str = "ok"):
+    def __init__(self, port: int = 0, mode: str = "ok", *,
+                 version: str = "0.0.0-fake", models_dir: Path | None = None,
+                 requires: str = "0.0.0"):
         if port == 11434:
             raise ValueError("port 11434 is reserved")
         if mode not in MODES:
             raise ValueError(f"unknown fixture mode: {mode}")
         self.mode = mode
+        self.version = version
+        self.models_dir = models_dir
+        self.requires = requires
+        self.loaded = None
         self.stopping = Event()
         self.lock = Lock()
         self.chat_requests = 0
@@ -34,6 +42,28 @@ class FakeOllama(ThreadingHTTPServer):
     def server_close(self) -> None:
         self.stopping.set()
         super().server_close()
+
+    def tags(self):
+        if self.models_dir is None:
+            return [_tag(model) for model in MODELS]
+        return [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(self.models_dir.glob("*.json"))
+        ]
+
+    def save_model(self, model, source=""):
+        tag = _tag(_model_key(model), source)
+        name = hashlib.sha256(tag["name"].encode()).hexdigest()
+        (self.models_dir / f"{name}.json").write_text(json.dumps(tag), encoding="utf-8")
+
+
+def _model_key(name):
+    return name if ":" in name.rsplit("/", 1)[-1] else name + ":latest"
+
+
+def _tag(model, source=""):
+    digest = hashlib.sha256((model + source).encode()).hexdigest()
+    return {"name": model, "model": model, "digest": "sha256:" + digest}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -52,20 +82,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/api/version":
-            self._json({"version": "0.0.0-fake"})
+            self._json({"version": self.server.version})
         elif self.path == "/api/tags":
-            self._json({"models": [
-                {"name": model, "model": model,
-                 "digest": "sha256:" + hashlib.sha256(model.encode()).hexdigest()}
-                for model in MODELS
-            ]})
+            self._json({"models": self.server.tags()})
+        elif self.path == "/api/ps":
+            models = []
+            if self.server.loaded:
+                models.append({
+                    **self.server.loaded, "size": 1024, "runner": "fake-runner",
+                    "size_vram": 0 if self.server.mode == "cpu_fallback" else 768,
+                })
+            self._json({"models": models})
         else:
             self._json({"error": "not found"}, 404)
 
     def do_POST(self):
-        if self.path != "/v1/chat/completions":
-            self._json({"error": "not found"}, 404)
-            return
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
             if not isinstance(body, dict) or not isinstance(body.get("model"), str):
@@ -75,6 +106,37 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         model = body["model"]
+        if self.server.models_dir is not None:
+            tags = {tag["name"]: tag for tag in self.server.tags()}
+            if self.path == "/api/pull":
+                self._pull(model)
+                return
+            if self.path == "/api/create":
+                source = tags.get(_model_key(body.get("from", "")))
+                if source is None or body.get("parameters") != {"temperature": 0, "seed": 42}:
+                    self._json({"error": "invalid derived-model request"}, 400)
+                    return
+                self.server.save_model(model, source["digest"])
+                self._json({"status": "success"})
+                return
+            if _model_key(model) not in tags:
+                self._json({"error": "unknown model"}, 404)
+                return
+            if self.path == "/api/show":
+                self._json({
+                    "capabilities": ["completion", "tools", "thinking"],
+                    "requires": self.server.requires,
+                    "model_info": {"general.architecture": "fake", "fake.context_length": 131072},
+                })
+                return
+            if self.path == "/v1/chat/completions":
+                self.server.loaded = tags[_model_key(model)]
+                if body.get("max_tokens") == 1:
+                    print(f"inference compute: Metal offloaded {_model_key(model)}", flush=True)
+        if self.path != "/v1/chat/completions":
+            self._json({"error": "not found"}, 404)
+            return
+
         model_mode = model.removeprefix("fake:")
         mode = model_mode if model.startswith("fake:") and model_mode in MODES else self.server.mode
         with self.server.lock:
@@ -93,6 +155,24 @@ class Handler(BaseHTTPRequestHandler):
                     "id": "chatcmpl-fake", "object": "chat.completion", "model": model,
                     "choices": [{"index": 0, "message": message, "finish_reason": finish}],
                 })
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+
+    def _pull(self, model):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        try:
+            if self.server.mode == "pull_error":
+                self._chunk(b'{"error":"fake pull error"}\n')
+            else:
+                self._chunk(b'{"status":"pulling",')
+                self._chunk(b'"total":128,"completed":0}\n')
+                self.server.save_model(model)
+                print(f"pulled {model}", flush=True)
+                self._chunk(b'{"status":"success"}\n')
+            self.wfile.write(b"0\r\n\r\n")
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
 
@@ -187,12 +267,26 @@ def running(mode: str = "ok"):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("serve",), nargs="?")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--mode", choices=MODES, default="ok")
     args = parser.parse_args()
+    if args.command == "serve":
+        host, separator, port = os.environ["OLLAMA_HOST"].rpartition(":")
+        if host != "127.0.0.1" or not separator:
+            parser.error("serve requires OLLAMA_HOST=127.0.0.1:PORT")
+        args.port = int(port)
+        args.mode = os.environ.get("FAKE_OLLAMA_MODE", args.mode)
+        options = {
+            "version": os.environ["FAKE_OLLAMA_VERSION"],
+            "models_dir": Path(os.environ["OLLAMA_MODELS"]),
+            "requires": os.environ.get("FAKE_OLLAMA_REQUIRES", "0.0.0"),
+        }
+    else:
+        options = {}
     if not 0 <= args.port <= 65535 or args.port == 11434:
         parser.error("use a port from 0 to 65535 other than 11434")
-    with FakeOllama(args.port, args.mode) as server:
+    with FakeOllama(args.port, args.mode, **options) as server:
         print(server.endpoint, flush=True)
         try:
             server.serve_forever()

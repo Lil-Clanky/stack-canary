@@ -3,6 +3,7 @@
 import re
 from dataclasses import asdict
 
+from ..outcome import aggregate
 from ..transport import Exchange, parse_json, request
 from . import CHECKS
 
@@ -190,3 +191,21 @@ def run_attempt(
         "request": exchange.request,
         "response": asdict(exchange.response),
     }
+
+
+def run_checks(endpoint, model, checks, settings, *, thinking):
+    records = []
+    for check_id in checks:
+        attempts = [
+            run_attempt(
+                check_id, endpoint, model, number, thinking=thinking,
+                deadline_s=settings.deadline_s, stall_s=settings.stall_s,
+            )
+            for number in range(1, settings.repeats + 1)
+        ]
+        records.append({
+            "check_id": check_id,
+            "outcome": aggregate(attempt["outcome"] for attempt in attempts),
+            "attempts": attempts,
+        })
+    return records

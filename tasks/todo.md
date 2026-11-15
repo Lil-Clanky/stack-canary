@@ -2,14 +2,14 @@
 
 - [x] 1. Skeleton.
 - [x] 2. Layer A against a fake Ollama.
-- [ ] 3. Ollama runtime manager.
-  - List the last N stable GitHub releases, skipping pre-releases.
-  - Download and verify the SHA-256 of `ollama-darwin.tgz`, then extract each version to `~/.stack-canary/runtimes/ollama/<v>/`.
-  - Start each server with a clean environment. Drop inherited `OLLAMA_*` variables, set a dedicated `HOME`, and set `OLLAMA_HOST=127.0.0.1:11535`, `OLLAMA_NOPRUNE=1`, `OLLAMA_NO_CLOUD=1`, `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`, `OLLAMA_CONTEXT_LENGTH=65536`, `OLLAMA_FLASH_ATTENTION=1`, and `OLLAMA_KV_CACHE_TYPE=q8_0`.
-  - Give each version an APFS clone of a master model store.
-  - Create derived `canary-<name>` models with temperature 0 and seed 42.
-  - Check GPU offload with `size_vram` from `/api/ps`.
-  - Keep at least 5 GB of disk space free.
+- [x] 3. Ollama runtime manager (code).
+  - [x] Resolve stable releases in numeric version order and verify SHA-256.
+  - [x] Stage and safely extract each version into its own runtime tree.
+  - [x] Run an isolated loopback server with a dedicated home, clean environment, and logs.
+  - [x] Prepare a master model store, create deterministic derived models, and clone the store per version.
+  - [x] Warm up models, record GPU offload, and write one result file per version.
+  - [x] Guard the free-space reserve before installation, pulls, and clones.
+  - [ ] Phase 3 live smoke test on the Mac mini.
 - [ ] 4. Hermes layer B. Check B6 writes a file with exact content.
   - Clone the requested tag in isolation and set up a uv virtual environment.
   - Set a dedicated `HERMES_HOME`.

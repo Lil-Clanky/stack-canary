@@ -3,13 +3,12 @@
 import argparse
 import platform
 import sys
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, config, results
+from . import __version__, config, managed, results
 from .checks import CHECKS
-from .checks.api import run_attempt
-from .outcome import aggregate
+from .checks.api import run_checks
 from .transport import loopback_url, request
 
 
@@ -54,10 +53,6 @@ def _print_table(models: list[dict], checks: tuple[str, ...]) -> None:
 
 def _run(args: argparse.Namespace) -> int:
     try:
-        _, target = loopback_url(args.endpoint)
-        if target != "/" or "?" in args.endpoint or "#" in args.endpoint:
-            raise ValueError("the endpoint must be a base URL with no path, query, or fragment")
-        endpoint = args.endpoint.rstrip("/")
         settings = config.load()
         overrides = {
             key: getattr(args, key) for key in ("repeats", "results_dir")
@@ -73,6 +68,14 @@ def _run(args: argparse.Namespace) -> int:
         if unknown:
             raise ValueError(f"unknown checks: {', '.join(unknown)}")
 
+        if args.ollama is not None:
+            return managed.run(args.ollama, args.models, checks, settings, dry_run=args.dry_run)
+        if args.dry_run:
+            raise ValueError("--dry-run requires --ollama")
+        _, target = loopback_url(args.endpoint)
+        if target != "/" or "?" in args.endpoint or "#" in args.endpoint:
+            raise ValueError("the endpoint must be a base URL with no path, query, or fragment")
+        endpoint = args.endpoint.rstrip("/")
         version = _get(endpoint, "/api/version", settings).get("version")
         if not isinstance(version, str) or not version:
             raise ValueError("/api/version: expected a version string")
@@ -88,19 +91,9 @@ def _run(args: argparse.Namespace) -> int:
     all_pass = True
     for name in args.models:
         thinking = name in settings.thinking_models
-        model = {"name": name, "digest": digests.get(name), "thinking": thinking, "checks": []}
-        for check_id in checks:
-            attempts = [
-                run_attempt(
-                    check_id, endpoint, name, number, thinking=thinking,
-                    deadline_s=settings.deadline_s, stall_s=settings.stall_s,
-                )
-                for number in range(1, settings.repeats + 1)
-            ]
-            outcome = aggregate(attempt["outcome"] for attempt in attempts)
-            model["checks"].append({"check_id": check_id, "outcome": outcome, "attempts": attempts})
-            all_pass = all_pass and outcome == "pass"
-        models.append(model)
+        records = run_checks(endpoint, name, checks, settings, thinking=thinking)
+        all_pass = all_pass and all(record["outcome"] == "pass" for record in records)
+        models.append({"name": name, "digest": digests.get(name), "thinking": thinking, "checks": records})
 
     result = {
         "schema_version": 1,
@@ -108,7 +101,14 @@ def _run(args: argparse.Namespace) -> int:
         "host": {"platform": platform.platform(), "python_version": platform.python_version()},
         "endpoint": endpoint,
         "runtime_version": version,
-        "settings": {**asdict(settings), "checks": checks},
+        "settings": {
+            "repeats": settings.repeats,
+            "results_dir": settings.results_dir,
+            "deadline_s": settings.deadline_s,
+            "stall_s": settings.stall_s,
+            "thinking_models": settings.thinking_models,
+            "checks": checks,
+        },
         "models": models,
     }
     try:
@@ -126,11 +126,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="canary")
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="run compatibility checks")
-    run.add_argument("--endpoint", required=True, help="base URL of the loopback fake server")
+    source = run.add_mutually_exclusive_group(required=True)
+    source.add_argument("--endpoint", help="base URL of a loopback server")
+    source.add_argument("--ollama", help="last:N or a comma-separated list of Ollama versions")
     run.add_argument("--models", required=True, type=_csv, help="comma-separated model names")
     run.add_argument("--checks", type=_csv, help="comma-separated check IDs (default: A1–A5)")
     run.add_argument("--repeats", type=int, help="attempts per model and check (default: 3)")
     run.add_argument("--results-dir", help="output directory (default: results)")
+    run.add_argument("--dry-run", action="store_true", help="show the managed plan without writing state")
     commands.add_parser("report", help="generate a compatibility report")
     args = parser.parse_args(argv)
     if args.command == "run":

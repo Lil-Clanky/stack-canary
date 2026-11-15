@@ -1,6 +1,14 @@
-# Copy to canary.toml to customize the phase 2 run defaults.
+# Copy to canary.toml to customize run defaults.
 repeats = 3
 results_dir = "results"
 deadline_s = 120
 stall_s = 30
 thinking_models = []
+
+# Managed Ollama settings.
+asset_name = "ollama-darwin.tgz"
+port = 11535
+context_length = 65536
+kv_cache_type = "q8_0"
+min_free_gb = 5
+allow_full_copy = false
