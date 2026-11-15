@@ -1,7 +1,7 @@
 # Stack Canary phases
 
 - [x] 1. Skeleton.
-- [ ] 2. Layer A against a fake Ollama.
+- [x] 2. Layer A against a fake Ollama.
 - [ ] 3. Ollama runtime manager.
   - List the last N stable GitHub releases, skipping pre-releases.
   - Download and verify the SHA-256 of `ollama-darwin.tgz`, then extract each version to `~/.stack-canary/runtimes/ollama/<v>/`.

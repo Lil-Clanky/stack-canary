@@ -2,5 +2,5 @@
 repeats = 3
 results_dir = "results"
 deadline_s = 2.0
-stall_s = 1.0
+stall_s = 1.5
 thinking_models = []
