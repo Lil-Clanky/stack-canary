@@ -1,0 +1,21 @@
+# Stack Canary phases
+
+- [x] 1. Skeleton.
+- [ ] 2. Layer A against a fake Ollama.
+- [ ] 3. Ollama runtime manager.
+  - List the last N stable GitHub releases, skipping pre-releases.
+  - Download and verify the SHA-256 of `ollama-darwin.tgz`, then extract each version to `~/.stack-canary/runtimes/ollama/<v>/`.
+  - Start each server with a clean environment. Drop inherited `OLLAMA_*` variables, set a dedicated `HOME`, and set `OLLAMA_HOST=127.0.0.1:11535`, `OLLAMA_NOPRUNE=1`, `OLLAMA_NO_CLOUD=1`, `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`, `OLLAMA_CONTEXT_LENGTH=65536`, `OLLAMA_FLASH_ATTENTION=1`, and `OLLAMA_KV_CACHE_TYPE=q8_0`.
+  - Give each version an APFS clone of a master model store.
+  - Create derived `canary-<name>` models with temperature 0 and seed 42.
+  - Check GPU offload with `size_vram` from `/api/ps`.
+  - Keep at least 5 GB of disk space free.
+- [ ] 4. Hermes layer B. Check B6 writes a file with exact content.
+  - Clone the requested tag in isolation and set up a uv virtual environment.
+  - Set a dedicated `HERMES_HOME`.
+  - Run `hermes chat --oneshot --safe-mode --provider custom ...`.
+  - Record traffic with a proxy between Hermes and Ollama.
+  - Clean up the gateway after each run.
+- [ ] 5. Add a version runner, write `results/*.json` per version, and draft a minimal curl reproduction in `repro/*.md` for each failure. Keep drafts local.
+- [ ] 6. Implement `canary report` as a static `report/index.html` matrix by version, model, and check, with regression markers.
+- [ ] 7. Run the full Mac mini matrix with 2 Ollama versions, 3 models (`qwen3.5:4b`, `llama3.2:3b`, `ministral-3:3b`), 6 checks, and 3 attempts per check.

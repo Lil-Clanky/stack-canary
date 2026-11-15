@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+.dev-deps/
+.tmp/
+build/
+dist/
+canary.toml
+results/
