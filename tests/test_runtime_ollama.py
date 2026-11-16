@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import socket
 import sys
 import tarfile
@@ -115,9 +116,64 @@ def test_install_is_verified_and_idempotent(home, settings):
     assert executable == home / "runtimes/ollama/1.10.0/ollama"
     assert (executable.parent / ".complete").read_text().strip() == release.sha256
     assert (executable.parent / "lib/ollama/fixture").read_bytes() == b"library"
-    assert (home / "downloads/1.10.0" / DEFAULT_ASSET).read_bytes() == data
+    assert not (home / "downloads/1.10.0" / DEFAULT_ASSET).exists()
     assert runtime.install(release) == executable
     assert calls == [release.asset_url]
+
+
+def test_seed_merges_without_overwriting_or_writing_source(home, settings, monkeypatch):
+    source = home.parent / "seed"
+    blob = source / "blobs/sha256-test"
+    manifest = source / "manifests/registry.ollama.ai/library/x/latest"
+    for path, content in ((blob, b"source blob"), (manifest, b"source manifest")):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(content)
+    target = home / "stores/master/blobs/sha256-test"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"existing blob")
+
+    def fingerprint():
+        return {
+            path.relative_to(source): (path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in source.rglob("*") if path.is_file()
+        }
+
+    before = fingerprint()
+    monkeypatch.setattr(runtime_ollama, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(runtime_ollama, "_clone_file_function", lambda: shutil.copy2)
+    runtime = OllamaRuntime(home, settings)
+    assert runtime.seed_master(source) == {hashlib.sha256(b"source manifest").hexdigest()}
+    assert runtime.seed_master(source) == set()
+    assert target.read_bytes() == b"existing blob"
+    assert (home / "stores/master" / manifest.relative_to(source)).read_bytes() == b"source manifest"
+    assert fingerprint() == before
+
+
+def test_seed_keeps_internal_symlinks_and_rejects_escapes(home, settings, monkeypatch):
+    source = home.parent / "seed"
+    (source / "blobs").mkdir(parents=True)
+    (source / "blobs/digest").write_bytes(b"manifest")
+    (source / "manifests-v2").mkdir()
+    link = source / "manifests-v2/tag"
+    try:
+        link.symlink_to("../blobs/digest")
+    except OSError:
+        if os.name == "nt":
+            pytest.skip("file symlinks require Windows symlink privileges")
+        raise
+    monkeypatch.setattr(runtime_ollama, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(runtime_ollama, "_clone_file_function", lambda: shutil.copy2)
+    runtime = OllamaRuntime(home, settings)
+    runtime.seed_master(source)
+    seeded = home / "stores/master/manifests-v2/tag"
+    assert os.readlink(seeded) == "../blobs/digest"
+    assert seeded.read_bytes() == b"manifest"
+    outside = home.parent / "outside"
+    outside.write_bytes(b"untouched")
+    (source / "manifests-v2/escape").symlink_to("../../outside")
+    with pytest.raises(ValueError, match="escapes the source"):
+        runtime.seed_master(source)
+    assert outside.read_bytes() == b"untouched"
 
 
 @pytest.mark.parametrize("extra", [

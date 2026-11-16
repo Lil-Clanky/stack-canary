@@ -141,7 +141,7 @@ def _binary(tree: Path) -> Path:
     raise ValueError("archive does not contain an ollama executable")
 
 
-def _clone_tree(source: Path, destination: Path) -> None:
+def _clone_file_function():
     # Apple's cp -c may silently copy on EXDEV or ENOTSUP. clonefile fails instead.
     clonefile = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True).clonefile
     clonefile.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32)
@@ -152,7 +152,22 @@ def _clone_tree(source: Path, destination: Path) -> None:
             error = ctypes.get_errno()
             raise OSError(error, os.strerror(error), src, None, dst)
 
-    shutil.copytree(source, destination, copy_function=clone_file, symlinks=True)
+    return clone_file
+
+
+def _clone_tree(source: Path, destination: Path) -> None:
+    shutil.copytree(source, destination, copy_function=_clone_file_function(), symlinks=True)
+
+
+def _seed_read_path(root: Path, path: Path) -> Path:
+    resolved = path.resolve(strict=True)
+    if not resolved.is_relative_to(root):
+        raise ValueError(f"seed link escapes the source store: {path}")
+    return resolved
+
+
+def _raise_walk_error(error):
+    raise error
 
 
 def _validate_port(port: int) -> None:
@@ -410,14 +425,17 @@ class OllamaRuntime:
             raise ValueError("release must have a SHA-256")
         asset_filename(release.asset_name)
         marker = _state_path(self.root, tree.relative_to(self.root) / ".complete")
-        if marker.is_file() and marker.read_text(encoding="ascii").strip() == release.sha256.lower():
-            return _binary(tree)
-
-        self.guard("install runtime")
         download = _state_path(
             self.root, Path("downloads") / release.version / release.asset_name,
         )
         partial = _state_path(self.root, download.relative_to(self.root).with_suffix(download.suffix + ".part"))
+        if marker.is_file() and marker.read_text(encoding="ascii").strip() == release.sha256.lower():
+            binary = _binary(tree)
+            safe_path(self.root, download).unlink(missing_ok=True)
+            safe_path(self.root, partial).unlink(missing_ok=True)
+            return binary
+
+        self.guard("install runtime")
         download.parent.mkdir(parents=True, exist_ok=True)
         tree.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=".install-", dir=tree.parent))
@@ -438,7 +456,7 @@ class OllamaRuntime:
             _state_path(extracted, Path(".complete")).write_text(release.sha256.lower() + "\n", encoding="ascii")
             self.guard("finish runtime extraction")
             self._publish(extracted, tree, staging / "previous")
-            safe_path(self.root, partial).replace(safe_path(self.root, download))
+            safe_path(self.root, download).unlink(missing_ok=True)
         finally:
             safe_path(self.root, partial).unlink(missing_ok=True)
             shutil.rmtree(safe_path(self.root, staging))
@@ -501,16 +519,77 @@ class OllamaRuntime:
             raise OllamaError("pull_failed", f"{model}: {exchange.error or 'pull did not complete'}")
         self.guard(f"finish pulling {model}")
 
+    def seed_master(self, source: Path) -> set[str]:
+        """Merge missing files by clone and return digests of imported manifests."""
+        source = source.expanduser().resolve(strict=True)
+        master = _state_path(self.root, _store("master", master=True))
+        if not source.is_dir() or source.is_relative_to(master) or master.is_relative_to(source):
+            raise ValueError("seed_store must be a separate model store directory")
+        if sys.platform != "darwin":
+            raise OllamaError("seed_clone_unavailable", "seed_store requires macOS clonefile")
+
+        files = []
+        for folder in ("blobs", "manifests", "manifests-v2"):
+            start = source / folder
+            if not os.path.lexists(start):
+                continue
+            if _seed_read_path(source, start) != start or not start.is_dir():
+                raise ValueError(f"invalid seed store directory: {start}")
+            for directory, subdirs, names in os.walk(start, onerror=_raise_walk_error):
+                base = Path(directory)
+                for name in subdirs:
+                    child = base / name
+                    if _seed_read_path(source, child) != child or child.is_symlink():
+                        raise ValueError(f"seed store directory links are unsupported: {child}")
+                for name in names:
+                    child = base / name
+                    target = _seed_read_path(source, child)
+                    link = os.readlink(child) if child.is_symlink() else None
+                    if not target.is_file() or (link is not None and Path(link).anchor):
+                        raise ValueError(f"seed store requires regular files or relative file links: {child}")
+                    files.append((child, target, link))
+
+        self.guard("seed model store")
+        imported = set()
+        try:
+            clone = _clone_file_function()
+            for child, target, link in files:
+                relative = child.relative_to(source)
+                destination = master / relative
+                parent = _state_path(self.root, destination.parent.relative_to(self.root))
+                if os.path.lexists(destination):
+                    safe_path(master, destination)
+                    continue
+                destination = safe_path(master, destination)
+                parent.mkdir(parents=True, exist_ok=True)
+                if link is None:
+                    clone(child, destination)
+                else:
+                    safe_path(master, parent / link)
+                    destination.symlink_to(link)
+                if relative.parts[0] != "blobs":
+                    imported.add(hashlib.sha256(target.read_bytes()).hexdigest())
+        except OSError as error:
+            raise OllamaError("seed_clone_failed", f"could not clone seed store: {error}") from error
+        self.guard("finish seeding model store")
+        return imported
+
     def prepare_master(self, models, release: Release, *, server=None) -> list[dict]:
+        imported = self.seed_master(Path(self.settings.seed_store)) if self.settings.seed_store else set()
         server = self.server(release, master=True) if server is None else server
         with server:
             endpoint = server.endpoint
             tags = self.tags(endpoint)
             prepared = []
             for model in models:
-                if model_key(model) not in tags:
+                digest = tags.get(model_key(model))
+                source = "present"
+                if digest is None:
                     self._pull(endpoint, model)
                     tags = self.tags(endpoint)
+                    source = "pulled"
+                elif digest.removeprefix("sha256:") in imported:
+                    source = "seeded"
                 derived = derived_name(model)
                 self.api(endpoint, "/api/create", {
                     "model": derived, "from": model,
@@ -528,6 +607,8 @@ class OllamaRuntime:
                 capabilities = details.get("capabilities")
                 prepared.append({
                     "name": model,
+                    "source": source,
+                    **({"seed_digest": digest} if source == "seeded" else {}),
                     "derived_model": derived,
                     "capabilities": capabilities if isinstance(capabilities, list) else [],
                     "requires": details.get("requires"),

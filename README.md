@@ -53,13 +53,21 @@ for specific versions. Use `--dry-run` to resolve releases and show the download
 and model pull plan and free disk space without writing state or starting a server.
 `GITHUB_TOKEN` is optional for GitHub API requests.
 
-The managed workflow keeps verified downloads, extracted runtimes, process homes,
+The managed workflow keeps extracted runtimes, process homes,
 logs, and model stores under `CANARY_HOME`, which defaults to `~/.stack-canary`.
 It pulls missing models into a master store. Each version runs sequentially
 with an isolated clone on loopback port 11535 by default. On macOS the model
 files use APFS copy-on-write clones. Set `allow_full_copy = true` to explicitly
 permit a full copy on macOS. Other platforms use full copies. The free-space
 reserve defaults to 5 GiB.
+
+On macOS, set `seed_store = "~/.ollama/models"` to clone missing files into
+the master store using APFS. The source is read-only. Once a runtime passes
+archive verification and installation, Canary removes the downloaded tarball.
+
+The v0.1 model set is `llama3.2:3b` (Llama-3 JSON template),
+`tev1:4b` (Qwen3.5 tool parser), and `granite4:3b-h` (Granite tool format).
+It covers llama.cpp with GGUF and MLX with tev1's safetensors.
 
 Managed runs write one schema-version-2 JSON file per release under
 `$CANARY_HOME/results`. A relative `--results-dir` is relative to `CANARY_HOME`.

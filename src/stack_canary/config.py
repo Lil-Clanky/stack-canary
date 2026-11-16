@@ -20,6 +20,7 @@ class Settings:
     kv_cache_type: str = "q8_0"
     min_free_gb: float = 5
     allow_full_copy: bool = False
+    seed_store: str | None = None
 
 
 def load(path: Path = Path("canary.toml")) -> Settings:
@@ -58,4 +59,8 @@ def load(path: Path = Path("canary.toml")) -> Settings:
         raise ValueError("min_free_gb must be finite and nonnegative")
     if type(settings.allow_full_copy) is not bool:
         raise ValueError("allow_full_copy must be a boolean")
+    if settings.seed_store is not None and (
+        not isinstance(settings.seed_store, str) or not settings.seed_store.strip()
+    ):
+        raise ValueError("seed_store must be a nonempty path")
     return settings

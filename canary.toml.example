@@ -12,3 +12,5 @@ context_length = 65536
 kv_cache_type = "q8_0"
 min_free_gb = 5
 allow_full_copy = false
+# Opt in to read-only, clonefile-only seeding on macOS.
+# seed_store = "~/.ollama/models"

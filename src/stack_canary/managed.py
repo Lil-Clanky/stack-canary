@@ -40,6 +40,8 @@ def _dry_run(runtime, releases, names):
         print(f"Ollama {release.version}: download {release.asset_name} if not installed")
         print(f"  {release.asset_url}")
         print(f"  SHA-256 {release.sha256}")
+    if runtime.settings.seed_store:
+        print(f"Seed master by cloning missing files from: {runtime.settings.seed_store}")
     print(f"Pull into master if missing: {', '.join(names)}")
 
 
