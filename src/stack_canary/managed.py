@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import __version__, results
 from .checks.api import run_checks
+from .harness_hermes import HermesHarness, hermes_tags
 from .releases import fetch_url, ollama_releases, version_key
 from .runtime_ollama import OllamaError, OllamaRuntime, canary_home, derived_name, model_key, safe_path
 
@@ -53,7 +54,7 @@ def _too_new(requires, version):
     return version_key(requires.removeprefix("v")) > version_key(version)
 
 
-def _check_version(runtime, release, checks, models, report):
+def _check_version(runtime, release, checks, models, report, harnesses):
     runtime.clone_store(release.version)
     server = runtime.server(release)
     report["server_env"] = server.environment
@@ -80,14 +81,21 @@ def _check_version(runtime, release, checks, models, report):
                 model["gpu"] = gpu
                 if gpu["offload"] == 0:
                     raise OllamaError("cpu_fallback", f"{name}: /api/ps reports zero GPU offload")
-                model["checks"] = run_checks(
-                    server.endpoint, derived, checks, runtime.settings, thinking=thinking,
-                )
+                for check_id in checks:
+                    if check_id == "B6":
+                        model["checks"].extend(
+                            {**harness.check(server.endpoint, derived), "harness_tag": harness.tag}
+                            for harness in harnesses
+                        )
+                    else:
+                        model["checks"].extend(run_checks(
+                            server.endpoint, derived, [check_id], runtime.settings, thinking=thinking,
+                        ))
     finally:
         report["log"] = _diagnostics(server)
 
 
-def _run(runtime, releases, names, checks, output):
+def _run(runtime, releases, names, checks, output, tags):
     failures = {}
     installed = []
     for release in releases:
@@ -114,6 +122,14 @@ def _run(runtime, releases, names, checks, output):
                 master_logs[release.version] = _diagnostics(server)
 
     identifier = results.run_id()
+    harnesses = []
+    harness_errors = []
+    if master:
+        for tag in tags:
+            try:
+                harnesses.append(HermesHarness(runtime.root, tag, runtime.settings, runtime.guard))
+            except INFRA_ERRORS as error:
+                harness_errors.append({"tag": tag, **_error(error, "prepare_harness")})
     exit_code = 0
     for release in releases:
         version = release.version
@@ -140,11 +156,18 @@ def _run(runtime, releases, names, checks, output):
         }
         if version in master_logs:
             report["master_log"] = master_logs[version]
+        if tags:
+            metadata = [harness.metadata for harness in harnesses]
+            report["harness"] = metadata[0] if len(metadata) == len(tags) == 1 else {"releases": metadata}
+            if harness_errors:
+                report["harness_errors"] = harness_errors
         try:
             if version not in failures:
-                _check_version(runtime, release, checks, models, report)
+                _check_version(runtime, release, checks, models, report, harnesses)
         except INFRA_ERRORS as error:
             failures[version] = _error(error, "check_version")
+        if harness_errors and version not in failures:
+            failures[version] = harness_errors[0]
 
         if version in failures:
             report["infra_error"] = failures[version]
@@ -162,7 +185,7 @@ def _run(runtime, releases, names, checks, output):
     return exit_code
 
 
-def run(spec, names, checks, settings, *, dry_run=False):
+def run(spec, names, checks, settings, *, hermes=None, dry_run=False):
     try:
         aliases = {model_key(name) for name in names}
         derived = {model_key(derived_name(name)) for name in names}
@@ -172,11 +195,14 @@ def run(spec, names, checks, settings, *, dry_run=False):
         runtime = OllamaRuntime(canary_home(), settings, fetch=fetch_url)
         output = safe_path(runtime.root, Path(settings.results_dir))
         releases = ollama_releases(spec, asset_name=settings.asset_name, fetch=fetch_url)
+        tags = hermes_tags(hermes, fetch=fetch_url) if "B6" in checks else []
         if dry_run:
             _dry_run(runtime, releases, names)
+            if tags:
+                print(f"Hermes releases for B6: {', '.join(tags)}")
             return 0
         with runtime.exclusive():
-            return _run(runtime, releases, names, checks, output)
+            return _run(runtime, releases, names, checks, output, tags)
     except INFRA_ERRORS as error:
         print(f"canary: {error}", file=sys.stderr)
         return 2

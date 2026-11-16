@@ -21,8 +21,8 @@ def loopback_url(url: str) -> tuple[int, str]:
     if parts.username is not None or parts.password is not None or parts.fragment:
         raise ValueError("the endpoint URL cannot contain credentials or a fragment")
     port = parts.port
-    if not port or port == 11434:
-        raise ValueError("use an explicit nonzero port other than 11434")
+    if not port or port in {9119, 9120, 11434}:
+        raise ValueError("use an explicit nonzero port other than 9119, 9120 or 11434")
     target = parts.path or "/"
     if parts.query:
         target += "?" + parts.query

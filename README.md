@@ -90,4 +90,28 @@ canary run --ollama last:1 --models llama3.2:3b
 Check the versioned JSON file for the Ollama version, nonzero GPU offload,
 and the five Layer A outcomes.
 
+For the three-model smoke test, opt in to `seed_store` in `canary.toml`, then run:
+
+```sh
+canary run --ollama last:1 --models llama3.2:3b,tev1:4b,granite4:3b-h --dry-run
+canary run --ollama last:1 --models llama3.2:3b,tev1:4b,granite4:3b-h
+```
+
+## Hermes Layer B
+
+Add `--hermes latest` to include B6. Use `last:N` or a stable tag such as
+`v0.23.1` to select specific Hermes releases. Layer A and B6 run by default
+with this option. Use `--checks B6` to run just the harness check.
+
+```sh
+canary run --ollama last:1 --hermes latest --models llama3.2:3b --checks A1,A2,A3,A4,A5,B6
+```
+
+The managed installer creates a dedicated Hermes virtual environment. B6 uses
+an isolated home, a fresh work directory, and a recording loopback proxy
+forwarding to managed Ollama. It verifies the exact file content and checks
+for a `write_file` event when Hermes supports stream JSON. Failed attempts
+report whether the recorded upstream responses were broken. Cleanup targets
+the launched process group and canary-owned process paths.
+
 See [the project checklist](tasks/todo.md) for planned work.

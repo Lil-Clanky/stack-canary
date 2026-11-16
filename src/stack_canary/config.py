@@ -21,6 +21,7 @@ class Settings:
     min_free_gb: float = 5
     allow_full_copy: bool = False
     seed_store: str | None = None
+    hermes_deadline_s: float = 300
 
 
 def load(path: Path = Path("canary.toml")) -> Settings:
@@ -44,13 +45,13 @@ def load(path: Path = Path("canary.toml")) -> Settings:
         raise ValueError("repeats must be a positive integer")
     if not isinstance(settings.results_dir, str) or not settings.results_dir:
         raise ValueError("results_dir must be a nonempty path")
-    for key in ("deadline_s", "stall_s"):
+    for key in ("deadline_s", "stall_s", "hermes_deadline_s"):
         value = getattr(settings, key)
         if type(value) not in (int, float) or not 0 < value < float("inf"):
             raise ValueError(f"{key} must be a positive finite number")
     asset_filename(settings.asset_name)
-    if type(settings.port) is not int or not 1 <= settings.port <= 65535 or settings.port == 11434:
-        raise ValueError("port must be from 1 to 65535, excluding 11434")
+    if type(settings.port) is not int or not 1 <= settings.port <= 65535 or settings.port in {9119, 9120, 11434}:
+        raise ValueError("port must be from 1 to 65535, excluding 9119, 9120 and 11434")
     if type(settings.context_length) is not int or settings.context_length < 1:
         raise ValueError("context_length must be a positive integer")
     if not isinstance(settings.kv_cache_type, str) or not settings.kv_cache_type.strip():

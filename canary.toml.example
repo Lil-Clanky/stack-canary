@@ -4,6 +4,7 @@ results_dir = "results"
 deadline_s = 120
 stall_s = 30
 thinking_models = []
+hermes_deadline_s = 300
 
 # Managed Ollama settings.
 asset_name = "ollama-darwin.tgz"

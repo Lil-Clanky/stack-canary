@@ -33,7 +33,9 @@ class OllamaError(Exception):
 
 
 def _reserved(path: Path) -> bool:
-    reserved = (Path.home() / ".ollama", Path("/Applications"), Path("/usr/local/bin"))
+    user_home = Path.home()
+    reserved = (user_home / ".ollama", user_home / ".hermes", user_home / ".local/bin/hermes",
+                Path("/Applications"), Path("/usr/local/bin"))
     if sys.platform == "darwin":
         path = Path(str(path).casefold())
         reserved = tuple(Path(str(item).casefold()) for item in reserved)
@@ -171,8 +173,8 @@ def _raise_walk_error(error):
 
 
 def _validate_port(port: int) -> None:
-    if type(port) is not int or not 1 <= port <= 65535 or port == 11434:
-        raise ValueError("use a port from 1 to 65535 other than 11434")
+    if type(port) is not int or not 1 <= port <= 65535 or port in {9119, 9120, 11434}:
+        raise ValueError("use a port from 1 to 65535 other than 9119, 9120 or 11434")
 
 
 def _port_free(port: int) -> None:

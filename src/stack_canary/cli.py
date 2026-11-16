@@ -63,13 +63,19 @@ def _run(args: argparse.Namespace) -> int:
             raise ValueError("repeats must be a positive integer")
         if not settings.results_dir:
             raise ValueError("results_dir must be a nonempty path")
-        checks = args.checks if args.checks is not None else tuple(CHECKS)
-        unknown = [check for check in checks if check not in CHECKS]
+        if args.hermes and args.ollama is None:
+            raise ValueError("--hermes requires --ollama")
+        defaults = (*CHECKS, "B6") if args.hermes else tuple(CHECKS)
+        checks = args.checks if args.checks is not None else defaults
+        unknown = [check for check in checks if check not in {*CHECKS, "B6"}]
         if unknown:
             raise ValueError(f"unknown checks: {', '.join(unknown)}")
+        if "B6" in checks and not args.hermes:
+            raise ValueError("B6 requires --hermes")
 
         if args.ollama is not None:
-            return managed.run(args.ollama, args.models, checks, settings, dry_run=args.dry_run)
+            return managed.run(args.ollama, args.models, checks, settings,
+                               hermes=args.hermes, dry_run=args.dry_run)
         if args.dry_run:
             raise ValueError("--dry-run requires --ollama")
         _, target = loopback_url(args.endpoint)
@@ -129,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     source = run.add_mutually_exclusive_group(required=True)
     source.add_argument("--endpoint", help="base URL of a loopback server")
     source.add_argument("--ollama", help="last:N or a comma-separated list of Ollama versions")
+    run.add_argument("--hermes", help="latest, last:N or a Hermes release tag")
     run.add_argument("--models", required=True, type=_csv, help="comma-separated model names")
     run.add_argument("--checks", type=_csv, help="comma-separated check IDs (default: A1–A5)")
     run.add_argument("--repeats", type=int, help="attempts per model and check (default: 3)")
