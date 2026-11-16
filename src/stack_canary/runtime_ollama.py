@@ -15,21 +15,27 @@ import tarfile
 import tempfile
 import time
 from collections import deque
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 
 from .config import Settings
 from .releases import SHA256, Release, asset_filename, fetch_url, version_key
 from .transport import request
 
+WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
+    prefix + digit for prefix in ("COM", "LPT") for digit in "123456789¹²³"
+}
+
 
 class OllamaError(Exception):
     """An Ollama infrastructure failure with a stable result code."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, http_status=None, body_excerpt=None):
         super().__init__(message)
         self.code = code
+        self.http_status = http_status
+        self.body_excerpt = body_excerpt
 
 
 def _reserved(path: Path) -> bool:
@@ -78,7 +84,7 @@ def _existing_parent(path: Path) -> Path:
 def _tar_path(name: str) -> PurePosixPath:
     path = PurePosixPath(name)
     if (path.is_absolute() or ".." in path.parts or "\\" in name or ":" in name
-            or any(part.endswith((" ", ".")) or PureWindowsPath(part).is_reserved()
+            or any(part.endswith((" ", ".")) or part.partition(".")[0].rstrip(" ").upper() in WINDOWS_DEVICES
                    for part in path.parts)):
         raise ValueError(f"unsafe archive path: {name!r}")
     return path
@@ -245,7 +251,7 @@ class OllamaServer:
     """A single installed server process and its diagnostics."""
 
     def __init__(self, root, release, executable, settings, *, argv_factory=None,
-                 master=False, ready_s=60, stop_s=15):
+                 master=False, ready_s=60, stop_s=15, disk_step=nullcontext):
         self.root = root
         self.release = release
         self.settings = settings
@@ -255,12 +261,24 @@ class OllamaServer:
         self.ready_s = ready_s
         self.stop_s = stop_s
         self.process = None
+        self.disk_step = disk_step
+        self.label = f"Ollama {release.version}" + (" master" if master else "")
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         self.log_path = _state_path(root, Path(f"logs/ollama-{release.version}-{timestamp}.log"))
         self.log_tail = []
         self.log_matches = []
 
     def __enter__(self):
+        try:
+            with self.disk_step(f"server start {self.label}"):
+                self._start()
+        except BaseException:
+            if self.process is not None:
+                self.__exit__(*sys.exc_info())
+            raise
+        return self
+
+    def _start(self):
         _port_free(self.settings.port)
         for key in ("HOME", "TMPDIR", "OLLAMA_MODELS"):
             safe_path(self.root, Path(self.environment[key])).mkdir(parents=True, exist_ok=True)
@@ -275,12 +293,7 @@ class OllamaServer:
                 stdin=subprocess.DEVNULL,
                 stdout=log, stderr=subprocess.STDOUT, **process_group,
             )
-        try:
-            self._ready()
-        except BaseException:
-            self.__exit__(*sys.exc_info())
-            raise
-        return self
+        self._ready()
 
     def _ready(self):
         deadline = time.monotonic() + self.ready_s
@@ -343,7 +356,8 @@ class OllamaServer:
 
     def __exit__(self, error_type, error, traceback):
         try:
-            self._stop()
+            with self.disk_step(f"server stop {self.label}"):
+                self._stop()
         finally:
             tail = deque(maxlen=30)
             with self.log_path.open(encoding="utf-8", errors="replace") as log:
@@ -355,6 +369,27 @@ class OllamaServer:
             self.log_tail = list(tail)
 
 
+def _swap_used_bytes():
+    if sys.platform != "darwin":
+        return None
+    try:
+        usage = subprocess.check_output(
+            ["/usr/sbin/sysctl", "-n", "vm.swapusage"], text=True, stderr=subprocess.DEVNULL, timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"\bused\s*=\s*(\d+(?:\.\d+)?)\s*([BKMGT])", usage)
+    if match:
+        amount, unit = match.groups()
+        return round(float(amount) * 1024 ** "BKMGT".index(unit))
+    return None
+
+
+def model_capabilities(details):
+    capabilities = details.get("capabilities")
+    return capabilities if isinstance(capabilities, list) else []
+
+
 class OllamaRuntime:
     def __init__(self, root: Path, settings: Settings, *, fetch=fetch_url,
                  argv_factory=None, ready_s=60, stop_s=15):
@@ -364,9 +399,29 @@ class OllamaRuntime:
         self.argv_factory = argv_factory
         self.ready_s = ready_s
         self.stop_s = stop_s
+        self.disk_trace = []
 
     def free_bytes(self):
         return shutil.disk_usage(_existing_parent(self.root)).free
+
+    def _disk_sample(self, step):
+        try:
+            free = self.free_bytes()
+        except OSError:
+            free = None
+        sample = {"step": step, "free_bytes": free, "swap_used_bytes": _swap_used_bytes()}
+        self.disk_trace.append(sample)
+        return sample
+
+    @contextmanager
+    def disk_step(self, step):
+        before = self._disk_sample(f"before {step}")
+        try:
+            yield
+        finally:
+            after = self._disk_sample(f"after {step}")
+            print(f"Disk {step}: free_bytes {before['free_bytes']} -> {after['free_bytes']}, "
+                  f"swap_used_bytes {before['swap_used_bytes']} -> {after['swap_used_bytes']}", flush=True)
 
     @contextmanager
     def exclusive(self):
@@ -470,7 +525,7 @@ class OllamaRuntime:
             raise ValueError("unexpected lib/ollama beside the version trees")
         return OllamaServer(
             self.root, release, _binary(tree), self.settings, argv_factory=self.argv_factory,
-            master=master, ready_s=self.ready_s, stop_s=self.stop_s,
+            master=master, ready_s=self.ready_s, stop_s=self.stop_s, disk_step=self.disk_step,
         )
 
     def api(self, endpoint, path, body=None, *, deadline_s=None) -> dict:
@@ -483,7 +538,14 @@ class OllamaRuntime:
             detail = exchange.error or (
                 exchange.payload.get("error") if isinstance(exchange.payload, dict) else "expected a JSON object"
             )
-            raise OllamaError("api_error", f"{path}: {detail}")
+            excerpt = exchange.response.body
+            if excerpt is not None:
+                excerpt = excerpt.encode("utf-8", errors="surrogateescape")[:2048].decode(
+                    "utf-8", errors="surrogateescape",
+                )
+            raise OllamaError(
+                "api_error", f"{path}: {detail}", http_status=exchange.response.status, body_excerpt=excerpt,
+            )
         return exchange.payload
 
     def _models(self, endpoint, path) -> list:
@@ -577,7 +639,10 @@ class OllamaRuntime:
         return imported
 
     def prepare_master(self, models, release: Release, *, server=None) -> list[dict]:
-        imported = self.seed_master(Path(self.settings.seed_store)) if self.settings.seed_store else set()
+        imported = set()
+        if self.settings.seed_store:
+            with self.disk_step("seed model store"):
+                imported = self.seed_master(Path(self.settings.seed_store))
         server = self.server(release, master=True) if server is None else server
         with server:
             endpoint = server.endpoint
@@ -587,17 +652,17 @@ class OllamaRuntime:
                 digest = tags.get(model_key(model))
                 source = "present"
                 if digest is None:
-                    self._pull(endpoint, model)
+                    with self.disk_step(f"pull {model}"):
+                        self._pull(endpoint, model)
                     tags = self.tags(endpoint)
                     source = "pulled"
                 elif digest.removeprefix("sha256:") in imported:
                     source = "seeded"
                 derived = derived_name(model)
-                self.api(endpoint, "/api/create", {
-                    "model": derived, "from": model,
-                    "parameters": {"temperature": 0, "seed": 42}, "stream": False,
-                })
                 details = self.api(endpoint, "/api/show", {"model": model})
+                capabilities = model_capabilities(details)
+                if "tools" in capabilities:
+                    self.create_model(endpoint, model, derived)
                 info = details.get("model_info")
                 context_length = None
                 if isinstance(info, dict):
@@ -606,13 +671,12 @@ class OllamaRuntime:
                         context_length = next(
                             (value for key, value in info.items() if key.endswith(".context_length")), None,
                         )
-                capabilities = details.get("capabilities")
                 prepared.append({
                     "name": model,
                     "source": source,
                     **({"seed_digest": digest} if source == "seeded" else {}),
                     "derived_model": derived,
-                    "capabilities": capabilities if isinstance(capabilities, list) else [],
+                    "capabilities": capabilities,
                     "requires": details.get("requires"),
                     "context_length": context_length,
                 })
@@ -620,9 +684,16 @@ class OllamaRuntime:
             for model in prepared:
                 model["digest"] = tags.get(model_key(model["name"]))
                 model["derived_digest"] = tags.get(model_key(model["derived_model"]))
-                if not model["digest"] or not model["derived_digest"]:
+                if not model["digest"] or ("tools" in model["capabilities"] and not model["derived_digest"]):
                     raise OllamaError("model_digest_missing", f"missing model digest for {model['name']}")
             return prepared
+
+    def create_model(self, endpoint, model, derived):
+        with self.disk_step(f"create {derived}"):
+            self.api(endpoint, "/api/create", {
+                "model": derived, "from": model,
+                "parameters": {"temperature": 0, "seed": 42}, "stream": False,
+            })
 
     def warm_up(self, endpoint, model: str, *, thinking: bool) -> dict:
         body = {

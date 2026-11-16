@@ -124,7 +124,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/show":
                 self._json({
-                    "capabilities": ["completion", "tools", "thinking"],
+                    "capabilities": (["decision"] if _model_key(model) == "decision-only:latest"
+                                     else ["completion", "tools", "thinking"]),
                     "requires": self.server.requires,
                     "model_info": {"general.architecture": "fake", "fake.context_length": 131072},
                 })
@@ -132,6 +133,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/v1/chat/completions":
                 self.server.loaded = tags[_model_key(model)]
                 if body.get("max_tokens") == 1:
+                    if _model_key(model) == "canary-warmup-error:latest":
+                        self._json({"error": "model cannot complete: " + "x" * 3000}, 400)
+                        return
+                    if _model_key(model) == "canary-server-dead:latest":
+                        os._exit(7)
                     print(f"inference compute: Metal offloaded {_model_key(model)}", flush=True)
         if self.path != "/v1/chat/completions":
             self._json({"error": "not found"}, 404)

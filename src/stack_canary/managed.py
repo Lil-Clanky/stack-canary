@@ -12,18 +12,22 @@ from . import __version__, results
 from .checks.api import run_checks
 from .harness_hermes import HermesHarness, hermes_tags
 from .releases import fetch_url, ollama_releases, version_key
-from .runtime_ollama import OllamaError, OllamaRuntime, canary_home, derived_name, model_key, safe_path
+from .runtime_ollama import (
+    OllamaError, OllamaRuntime, canary_home, derived_name, model_capabilities, model_key, safe_path,
+)
 
 INFRA_ERRORS = (OllamaError, OSError, ValueError, tarfile.TarError,
                 subprocess.SubprocessError, http.client.HTTPException)
 
 
-def _error(error, stage):
-    return {
+def _error(error, stage=None):
+    evidence = {
         "code": error.code if isinstance(error, OllamaError) else "runtime_error",
         "message": str(error),
-        "stage": stage,
+        "http_status": getattr(error, "http_status", None),
+        "body_excerpt": getattr(error, "body_excerpt", None),
     }
+    return {**evidence, "stage": stage} if stage else evidence
 
 
 def _diagnostics(server):
@@ -54,43 +58,82 @@ def _too_new(requires, version):
     return version_key(requires.removeprefix("v")) > version_key(version)
 
 
+def _mark_checks(model, checks, outcome, **details):
+    model["outcome"] = outcome
+    completed = {check["check_id"] for check in model["checks"]}
+    model["checks"].extend(
+        {"check_id": check, "outcome": outcome, "attempts": [], **details}
+        for check in checks if check not in completed
+    )
+
+
+def _check_model(runtime, server, version, checks, model, tags, harnesses):
+    name, derived = model["name"], model["derived_model"]
+    model["digest"] = tags.get(model_key(name))
+    model["derived_digest"] = tags.get(model_key(derived))
+    if _too_new(model["requires"], version):
+        _mark_checks(model, checks, "n/a")
+        return
+
+    details = runtime.api(server.endpoint, "/api/show", {"model": name})
+    model["capabilities"] = model_capabilities(details)
+    if "tools" not in model["capabilities"]:
+        _mark_checks(model, checks, "n/a", reason="model_lacks_tools")
+        return
+    model["requires"] = details.get("requires") or model["requires"]
+    if _too_new(model["requires"], version):
+        _mark_checks(model, checks, "n/a")
+        return
+
+    if model["digest"] and not model["derived_digest"]:
+        runtime.create_model(server.endpoint, name, derived)
+        model["derived_digest"] = runtime.tags(server.endpoint).get(model_key(derived))
+    if not model["digest"] or not model["derived_digest"]:
+        raise OllamaError("model_digest_missing", f"missing model digest for {name}")
+
+    thinking = "thinking" in model["capabilities"] or name in runtime.settings.thinking_models
+    model["thinking"] = thinking
+    with runtime.disk_step(f"warm-up {name}"):
+        model["gpu"] = runtime.warm_up(server.endpoint, derived, thinking=thinking)
+        if model["gpu"]["offload"] == 0:
+            raise OllamaError("cpu_fallback", f"{name}: /api/ps reports zero GPU offload")
+    with runtime.disk_step(f"checks {name}"):
+        for check_id in checks:
+            if check_id == "B6":
+                model["checks"].extend(
+                    {**harness.check(server.endpoint, derived), "harness_tag": harness.tag}
+                    for harness in harnesses
+                )
+            else:
+                model["checks"].extend(run_checks(
+                    server.endpoint, derived, [check_id], runtime.settings, thinking=thinking,
+                ))
+
+
+def _confirm_server(runtime, server):
+    try:
+        runtime.api(server.endpoint, "/api/version", deadline_s=min(runtime.settings.deadline_s, 5))
+    except OllamaError as error:
+        if error.http_status is None:
+            raise OllamaError("server_unreachable", f"could not reach Ollama after model error: {error}") from error
+
+
 def _check_version(runtime, release, checks, models, report, harnesses):
-    runtime.clone_store(release.version)
+    with runtime.disk_step(f"clone_store Ollama {release.version}"):
+        runtime.clone_store(release.version)
     server = runtime.server(release)
     report["server_env"] = server.environment
     try:
         with server:
             tags = runtime.tags(server.endpoint)
             for model in models:
-                if _too_new(model["requires"], release.version):
-                    model["outcome"] = "n/a"
-                    model["checks"] = [
-                        {"check_id": check, "outcome": "n/a", "attempts": []}
-                        for check in checks
-                    ]
-                    continue
-
-                name, derived = model["name"], model["derived_model"]
-                model["digest"] = tags.get(model_key(name))
-                model["derived_digest"] = tags.get(model_key(derived))
-                if not model["digest"] or not model["derived_digest"]:
-                    raise OllamaError("model_digest_missing", f"missing model digest for {name}")
-                thinking = "thinking" in model["capabilities"] or name in runtime.settings.thinking_models
-                model["thinking"] = thinking
-                gpu = runtime.warm_up(server.endpoint, derived, thinking=thinking)
-                model["gpu"] = gpu
-                if gpu["offload"] == 0:
-                    raise OllamaError("cpu_fallback", f"{name}: /api/ps reports zero GPU offload")
-                for check_id in checks:
-                    if check_id == "B6":
-                        model["checks"].extend(
-                            {**harness.check(server.endpoint, derived), "harness_tag": harness.tag}
-                            for harness in harnesses
-                        )
-                    else:
-                        model["checks"].extend(run_checks(
-                            server.endpoint, derived, [check_id], runtime.settings, thinking=thinking,
-                        ))
+                try:
+                    _check_model(runtime, server, release.version, checks, model, tags, harnesses)
+                except INFRA_ERRORS as error:
+                    model["model_error"] = _error(error)
+                    _mark_checks(model, checks, "error")
+                    print(f"Ollama {release.version}, {model['name']}: {error}", file=sys.stderr)
+                    _confirm_server(runtime, server)
     finally:
         report["log"] = _diagnostics(server)
 
@@ -127,11 +170,14 @@ def _run(runtime, releases, names, checks, output, tags):
     if master:
         for tag in tags:
             try:
-                harnesses.append(HermesHarness(runtime.root, tag, runtime.settings, runtime.guard))
+                with runtime.disk_step(f"Hermes install {tag}"):
+                    harnesses.append(HermesHarness(runtime.root, tag, runtime.settings, runtime.guard))
             except INFRA_ERRORS as error:
                 harness_errors.append({"tag": tag, **_error(error, "prepare_harness")})
     exit_code = 0
+    shared_trace = runtime.disk_trace.copy()
     for release in releases:
+        trace_start = len(runtime.disk_trace)
         version = release.version
         models = [
             {**model, "checks": [], "gpu": None} for model in master
@@ -168,10 +214,13 @@ def _run(runtime, releases, names, checks, output, tags):
             failures[version] = _error(error, "check_version")
         if harness_errors and version not in failures:
             failures[version] = harness_errors[0]
+        report["disk_trace"] = [*shared_trace, *runtime.disk_trace[trace_start:]]
 
         if version in failures:
             report["infra_error"] = failures[version]
             print(f"Ollama {version}: {failures[version]['message']}", file=sys.stderr)
+            exit_code = 2
+        elif any("model_error" in model for model in models):
             exit_code = 2
         elif any(check["outcome"] not in {"pass", "n/a"} for model in models for check in model["checks"]):
             exit_code = max(exit_code, 1)

@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from typing import Literal
 
 AttemptOutcome = Literal["pass", "fail", "timeout"]
-CheckOutcome = Literal["pass", "fail", "timeout", "flaky"]
+CheckOutcome = Literal["pass", "fail", "timeout", "flaky", "error", "n/a"]
 
 
 def aggregate(attempts: Iterable[AttemptOutcome]) -> CheckOutcome:

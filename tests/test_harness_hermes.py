@@ -107,6 +107,9 @@ def test_managed_b6_end_to_end(home, settings, monkeypatch):
     result = read_reports(home)["1.10.0"]
     assert result["harness"]["tag"] == TAG
     assert result["harness"]["commit"] == "fake"
+    steps = [sample["step"] for sample in result["disk_trace"]]
+    assert "before Hermes install v0.23.1" in steps
+    assert "after Hermes install v0.23.1" in steps
     check, = result["models"][0]["checks"]
     assert check["check_id"] == "B6"
     assert check["outcome"] == "pass"

@@ -183,6 +183,9 @@ def test_seed_keeps_internal_symlinks_and_rejects_escapes(home, settings, monkey
     {"link": (tarfile.SYMTYPE, "../../outside")},
     {"link": (tarfile.LNKTYPE, "../../outside")},
     {"fifo": (tarfile.FIFOTYPE, "")},
+    {"lib/nUl.txt": b"rejected"},
+    {"lib/COM¹.ext": b"rejected"},
+    {"lib/AUX .cfg": b"rejected"},
 ])
 def test_unsafe_tar_leaves_no_archive_or_tree(home, settings, extra):
     data = make_tarball(**extra)
@@ -399,7 +402,7 @@ def test_dry_run_is_read_only(home, settings, monkeypatch, capsys):
     assert "Free disk space" in out and DEFAULT_ASSET in out and "Pull into master if missing: x" in out
 
 
-def test_managed_run_end_to_end(home, settings, monkeypatch):
+def test_managed_run_end_to_end(home, settings, monkeypatch, capsys):
     monkeypatch.setenv("OLLAMA_MODELS", str(home.parent / "untouched"))
     managed_fixture(monkeypatch, settings)
     assert main(["run", "--ollama", "last:1", "--models", "x"]) == 0
@@ -415,6 +418,18 @@ def test_managed_run_end_to_end(home, settings, monkeypatch):
     assert not (home.parent / "untouched").exists()
     assert "pulled x" in report["master_log"]["tail"]
     assert any("Metal offloaded" in line for line in report["log"]["matches"])
+    steps = [
+        "server start Ollama 1.10.0 master", "pull x", "create canary-x", "server stop Ollama 1.10.0 master",
+        "clone_store Ollama 1.10.0", "server start Ollama 1.10.0",
+        "warm-up x", "checks x", "server stop Ollama 1.10.0",
+    ]
+    trace = report["disk_trace"]
+    assert [sample["step"] for sample in trace] == [
+        f"{phase} {step}" for step in steps for phase in ("before", "after")
+    ]
+    assert all(type(sample["free_bytes"]) is int and "swap_used_bytes" in sample for sample in trace)
+    assert [line.split(": free_bytes", 1)[0] for line in capsys.readouterr().out.splitlines()
+            if line.startswith("Disk ")] == [f"Disk {step}" for step in steps]
     model, = report["models"]
     assert model["digest"] != model["derived_digest"]
     assert model["derived_model"] == "canary-x"
@@ -447,10 +462,77 @@ def test_cpu_fallback_records_failure_and_other_version_continues(home, settings
     assert main(["run", "--ollama", "last:2", "--models", "x", "--checks", "A1"]) == 2
     reports = read_reports(home)
     failed = reports["1.10.0"]
-    assert failed["infra_error"]["code"] == "cpu_fallback"
+    assert "infra_error" not in failed
+    assert failed["models"][0]["model_error"]["code"] == "cpu_fallback"
     assert failed["models"][0]["gpu"]["offload"] == 0
-    assert failed["models"][0]["checks"] == []
+    assert failed["models"][0]["checks"] == [{"check_id": "A1", "outcome": "error", "attempts": []}]
     assert reports["1.9.0"]["models"][0]["checks"][0]["outcome"] == "pass"
+
+
+def test_decision_only_model_is_skipped_before_warmup(home, settings, monkeypatch):
+    managed_fixture(monkeypatch, settings)
+    args = ["run", "--ollama", "last:1", "--models", "decision-only,x", "--checks", "A1,A3", "--repeats", "1"]
+    assert main(args) == 0
+    report = read_reports(home)["1.10.0"]
+    decision, supported = report["models"]
+    assert decision["capabilities"] == ["decision"]
+    assert decision["gpu"] is None and decision["derived_digest"] is None
+    assert decision["outcome"] == "n/a"
+    assert decision["checks"] == [
+        {"check_id": check, "outcome": "n/a", "reason": "model_lacks_tools", "attempts": []}
+        for check in ("A1", "A3")
+    ]
+    assert all(check["outcome"] == "pass" for check in supported["checks"])
+    assert not any("decision-only" in step["step"] for step in report["disk_trace"]
+                   if any(word in step["step"] for word in ("create ", "warm-up ", "checks ")))
+
+
+def test_warmup_http_error_preserves_response_and_continues_same_version(home, settings, monkeypatch):
+    managed_fixture(monkeypatch, settings)
+    args = ["run", "--ollama", "last:1", "--models", "warmup-error,x", "--checks", "A1,A3", "--repeats", "1"]
+    assert main(args) == 2
+    report = read_reports(home)["1.10.0"]
+    assert "infra_error" not in report
+    failed, supported = report["models"]
+    assert failed["model_error"] == {
+        "code": "api_error", "message": "/v1/chat/completions: http_error",
+        "http_status": 400, "body_excerpt": json.dumps({"error": "model cannot complete: " + "x" * 3000})[:2048],
+    }
+    assert failed["checks"] == [
+        {"check_id": check, "outcome": "error", "attempts": []} for check in ("A1", "A3")
+    ]
+    assert all(check["outcome"] == "pass" for check in supported["checks"])
+    assert any(sample["step"] == "after warm-up warmup-error" for sample in report["disk_trace"])
+
+
+def test_dead_server_ends_version(home, settings, monkeypatch):
+    managed_fixture(monkeypatch, settings)
+    args = ["run", "--ollama", "last:1", "--models", "server-dead,x", "--checks", "A1", "--repeats", "1"]
+    assert main(args) == 2
+    report = read_reports(home)["1.10.0"]
+    assert report["infra_error"]["code"] == "server_unreachable"
+    assert report["models"][0]["checks"] == [{"check_id": "A1", "outcome": "error", "attempts": []}]
+    assert report["models"][1]["checks"] == []
+    assert not any(sample["step"] == "before warm-up x" for sample in report["disk_trace"])
+    assert report["disk_trace"][-1]["step"] == "after server stop Ollama 1.10.0"
+
+
+@pytest.mark.parametrize(("platform", "usage", "expected"), [
+    ("darwin", "vm.swapusage: total = 2048.00M  used = 125.50M  free = 1922.50M", 131596288),
+    ("darwin", "vm.swapusage: total = 3.00G used = 1.50G free = 1.50G", 1610612736),
+    ("darwin", "unexpected output", None),
+    ("win32", None, None),
+])
+def test_swap_used_bytes(platform, usage, expected, monkeypatch):
+    monkeypatch.setattr(runtime_ollama, "sys", SimpleNamespace(platform=platform))
+
+    def read(argv, **kwargs):
+        assert platform == "darwin"
+        assert argv == ["/usr/sbin/sysctl", "-n", "vm.swapusage"]
+        return usage
+
+    monkeypatch.setattr(runtime_ollama.subprocess, "check_output", read)
+    assert runtime_ollama._swap_used_bytes() == expected
 
 
 def test_requires_newer_version_yields_na(home, settings, monkeypatch):

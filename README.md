@@ -61,41 +61,46 @@ files use APFS copy-on-write clones. Set `allow_full_copy = true` to explicitly
 permit a full copy on macOS. Other platforms use full copies. The free-space
 reserve defaults to 5 GiB.
 
-On macOS, set `seed_store = "~/.ollama/models"` to clone missing files into
-the master store using APFS. The source is read-only. Once a runtime passes
-archive verification and installation, Canary removes the downloaded tarball.
+The optional `seed_store` setting is unset by default. On macOS, opt in with
+`seed_store = "~/.ollama/models"` to clone missing files into the master store
+using APFS. The source is read-only. Once a runtime passes archive verification
+and installation, Canary removes the downloaded tarball.
 
-The v0.1 model set is `llama3.2:3b` (Llama-3 JSON template),
-`tev1:4b` (Qwen3.5 tool parser), and `granite4:3b-h` (Granite tool format).
-It covers llama.cpp with GGUF and MLX with tev1's safetensors.
+The v0.1 model set is `llama3.2:3b` (Llama-3 JSON template) and
+`granite4:3b-h` (Granite tool format). Both are already in the Mac mini's
+canary store. We dropped `tev1:4b` because the installed model reports only
+`decision` in `/api/show`.
 
 Managed runs write one schema-version-2 JSON file per release under
 `$CANARY_HOME/results`. A relative `--results-dir` is relative to `CANARY_HOME`.
-Reports include base and derived model digests, GPU offload, log matches, and
-check attempts. A model whose minimum Ollama version is newer than the
-release under test is marked `n/a`. Zero GPU offload is an infrastructure
-error. The run writes the affected release's report and continues with the
-remaining releases.
+Reports include base and derived model digests, capabilities, GPU offload,
+log matches, and check attempts. The check cells can be `pass`, `fail`,
+`timeout`, `flaky`, `n/a`, or `error`. Models that require a newer Ollama
+version are `n/a`. When the base model lacks the `tools` capability, all
+its checks are `n/a` with reason `model_lacks_tools` and it skips warm-up.
+Warm-up and GPU errors, including zero GPU offload, produce `error` cells
+and a `model_error` with HTTP status and up to 2 KiB of response body when
+available. The runner checks `/api/version` and moves to the next model
+if the server answers. An `error` or infrastructure failure gives exit code
+2, a failed, timed-out, or flaky check gives 1, and pass and `n/a` alone give 0.
+
+The managed runner prints a line for each heavy step and records before and
+after samples in the result's `disk_trace`. Each sample includes free disk
+bytes and macOS swap usage in bytes. Swap is `null` elsewhere or when the
+reading is unavailable.
 
 ## Live smoke test (macOS)
 
 From the repository on the Mac mini, preview the plan, then run the newest
-stable release with one model.
+stable release with the v0.1 model set.
 
 ```sh
-canary run --ollama last:1 --models llama3.2:3b --dry-run
-canary run --ollama last:1 --models llama3.2:3b
+canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h --dry-run
+canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h
 ```
 
 Check the versioned JSON file for the Ollama version, nonzero GPU offload,
 and the five Layer A outcomes.
-
-For the three-model smoke test, opt in to `seed_store` in `canary.toml`, then run:
-
-```sh
-canary run --ollama last:1 --models llama3.2:3b,tev1:4b,granite4:3b-h --dry-run
-canary run --ollama last:1 --models llama3.2:3b,tev1:4b,granite4:3b-h
-```
 
 ## Hermes Layer B
 

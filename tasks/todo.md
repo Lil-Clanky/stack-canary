@@ -10,7 +10,7 @@
   - [x] Warm up models, record GPU offload, and write one result file per version.
   - [x] Guard the free-space reserve before installation, pulls, and clones.
   - [x] Phase 3 live smoke test on the Mac mini.
-  - [ ] Live seed-store smoke test with the v0.1 model set.
+  - [ ] Live smoke test with the two v0.1 models already in the canary store.
 - [x] 4. Hermes layer B (code). Check B6 writes a file with exact content.
   - Clone the requested tag in isolation and set up a uv virtual environment.
   - Set a dedicated `HERMES_HOME`.
@@ -20,5 +20,5 @@
   - [ ] Phase 4 live smoke test on the Mac mini.
 - [ ] 5. Add a version runner, write `results/*.json` per version, and draft a minimal curl reproduction in `repro/*.md` for each failure. Keep drafts local.
 - [ ] 6. Implement `canary report` as a static `report/index.html` matrix by version, model, and check, with regression markers.
-- [ ] 7. Run the full Mac mini matrix with 2 Ollama versions, 3 models (`llama3.2:3b`, `tev1:4b`, `granite4:3b-h`), 6 checks, and 3 attempts per check.
-  - Cover Llama-3 JSON, the Qwen3.5 parser, and Granite tool format, plus llama.cpp (GGUF) and MLX (tev1 safetensors).
+- [ ] 7. Run the full Mac mini matrix with 2 Ollama versions, 2 models (`llama3.2:3b`, `granite4:3b-h`), 6 checks, and 3 attempts per check.
+  - Cover the Llama-3 JSON template and Granite tool format.
