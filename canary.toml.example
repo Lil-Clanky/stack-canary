@@ -25,3 +25,11 @@ keep_runtimes = 3
 keep_hermes = 2
 notify_on_success = false
 # notify_command = ["/absolute/path/to/notify"]
+
+
+# Optional local notifications and private matrix publishing.
+# notify = ["macos", "ntfy"]
+# ntfy_server = "https://ntfy.sh"
+# ntfy_topic = "set-your-private-topic-in-canary.toml"
+# publish_branch = "matrix"
+# publish_gh_user = "Lil-Clanky"

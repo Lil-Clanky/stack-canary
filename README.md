@@ -154,10 +154,16 @@ replacement or register a launchd job. Canary sets `HERMES_REAL_HOME` to its
 own `HOME`, outside the profile's special `home` directory, so Hermes'
 subprocess home resolver keeps the isolated path.
 
-The JSON records `gateway_mode: foreground` for the audited v0.23.2 commit.
-Other macOS releases get B6 `error` with reason `harness_requires_launchd`
-until their launch path is verified. The foreground path requires a canary
-home short enough to keep the Unix control socket inside it.
+On macOS, B6 requires a verified tag and matching installed commit. Canary
+seeds `CANARY_HOME/hermes-verified.json` with the previously audited
+v0.23.2 commit. Run `canary hermes verify v0.23.2` (or another explicit
+stable tag) to update the record. The verifier checks the explicit endpoint
+and real-home handling in source, then runs one Llama B6 against the newest
+tested Ollama with a logging launchctl shim and a before/after isolation
+audit. A tag with a failed probe is marked unsupported. Only a newly
+registered launchd label whose program or Hermes home resolves inside
+Canary is eligible for probe cleanup. The foreground path requires a
+Canary home short enough to fit its Unix control socket.
 
 For Hermes v0.23.2, the B6 one-shot gateway accepts the following options
 when advertised by the installed command's help. Canary uses the absolute
@@ -216,9 +222,12 @@ directories. Both output directories are Git-ignored.
 
 `canary watch` uses the managed run lock and checks the newest two stable
 Ollama releases by default. It runs A1–A5 and B6 for each release without a
-complete result for the configured models and pinned Hermes tag. Newer
-Hermes tags appear in the summary as unverified. Use `canary watch --dry-run`
-to preview the plan. Release discovery uses the existing 60-minute cache.
+complete set of results for the configured models and pinned Hermes tag.
+A1–A5 and B6 can come from separate eligible files: watch uses the report's
+cell merge. On macOS, watch verifies a newly discovered latest stable Hermes
+tag and runs a separate B6 column for a verified newer tag. A failed probe
+appears in the summary. Use `canary watch --dry-run` to preview the plan
+without probing. Release discovery uses the existing 60-minute cache.
 
 After new work, the watcher regenerates the compatibility report and repro
 drafts, writes `report/summary.md` and `report/summary.json`, and prunes old
@@ -238,6 +247,29 @@ The optional `notify_command` is a list of arguments. Canary runs it with a
 regression, an infrastructure or isolation error, or a newly discovered
 unverified Hermes tag. Set `notify_on_success = true` to also notify on success.
 Configure the watcher in `canary.toml` using `canary.toml.example`.
+
+Built-in notifications can be enabled with `notify = ["macos", "ntfy"]`.
+Set a private `ntfy_topic` in the ignored local configuration. The optional
+`ntfy_server` defaults to `https://ntfy.sh`. Messages contain a fixed
+headline and incident counts rather than raw reports. Notification failures
+do not change the run's exit code. Use `canary notify --test` to check the
+configured channels. It submits real test notifications.
+
+## Publishing the matrix
+
+`canary report` writes `report/MATRIX.md` alongside its default HTML
+output. The Markdown matrix uses one B6 column per Hermes tag, marks
+runtime regressions and links to repro drafts.
+
+Set `publish_branch = "matrix"` and `publish_gh_user = "Lil-Clanky"` to
+enable publishing to the private Stack Canary repository. Run
+`canary publish` manually, or let watch publish when configured. The
+publisher uses an orphan worktree at `CANARY_HOME/publish` and pushes only
+the matrix ref. It allows only the two matrix formats, the two summaries
+and generated repro drafts. It shortens macOS user paths and refuses to
+push detected credentials, the ntfy topic or the proxy API key. GitHub
+authentication is scoped to the configured account without changing
+global Git or gh settings.
 
 On macOS, run the following from the repository with Canary installed in
 `.venv`. The time is local.

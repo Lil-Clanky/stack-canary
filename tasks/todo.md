@@ -72,3 +72,21 @@ or Canary, case-insensitively. It still compares every LaunchAgent plist.
 - [x] Prune old managed releases while keeping the master store and results.
 - [x] Implement the opt-in macOS schedule and record its exact audit exemption.
 - [x] Cover the scheduler with offline launchd mocks.
+
+
+## Review 0.3.0 (development)
+
+- The macOS foreground registry binds B6 eligibility to a tag and commit.
+- The v0.23.2 re-verification passed the static contract and the B6 attempt
+  on Ollama 0.40.16. The launchctl shim was empty and no new relevant job
+  or plist appeared. The broader isolation audit reported a violation, so
+  the live attempt did not renew the attestation. Record a clean
+  re-verification before releasing.
+- macOS accepted the test notification submission, and the ntfy server
+  accepted its test with HTTP 200.
+- The publish command sanitizes the compatibility artifacts and restricts
+  its push to the orphan matrix branch.
+- Watch uses the merged history for split A/B6 coverage. The offline suite
+  covers the merge and rejects B6 evidence from an isolation violation.
+- A new full watch and release check are pending until the Mac is available
+  for local model workloads.
