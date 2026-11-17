@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import hermes_registry, hermes_verify, isolation, maintenance, managed, report, results
+from . import hermes_registry, hermes_verify, isolation, maintenance, managed, notifications, report, results
 from .harness_hermes import hermes_tags
 from .releases import ollama_releases, version_key
 from .runtime_ollama import OllamaError, OllamaRuntime, _state_path, _swap_used_bytes, canary_home, safe_path
@@ -133,11 +133,12 @@ def _write_summary(root, summary):
 
 
 def _notify(settings, summary, path, code):
-    if not settings.notify_command:
-        return
     if (summary["regressions"] or summary["infra_errors"] or summary["isolation_errors"]
             or summary["new_unverified_hermes"] or summary.get("failed_hermes")
             or (code == 0 and settings.notify_on_success)):
+        notifications.send(settings, summary)
+        if not settings.notify_command:
+            return
         try:
             subprocess.run([*settings.notify_command, str(path)], check=True, timeout=HOOK_TIMEOUT_S,
                            stdin=subprocess.DEVNULL)

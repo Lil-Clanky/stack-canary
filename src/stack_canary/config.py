@@ -27,6 +27,9 @@ class Settings:
     hermes_tag: str = "v0.23.2"
     notify_command: tuple[str, ...] | None = None
     notify_on_success: bool = False
+    notify: tuple[str, ...] = ()
+    ntfy_server: str = "https://ntfy.sh"
+    ntfy_topic: str | None = None
     keep_runtimes: int = 3
     keep_hermes: int = 2
 
@@ -41,11 +44,11 @@ def load(path: Path = Path("canary.toml")) -> Settings:
     unknown = values.keys() - {item.name for item in fields(Settings)}
     if unknown:
         raise ValueError(f"unknown config settings: {', '.join(sorted(unknown))}")
-    for key in ("thinking_models", "models", "notify_command"):
+    for key in ("thinking_models", "models", "notify_command", "notify"):
         if key in values:
             items = values[key]
             if (not isinstance(items, list) or not all(isinstance(item, str) and item.strip() for item in items)
-                    or (key != "thinking_models" and not items)):
+                    or (key in {"models", "notify_command"} and not items)):
                 raise ValueError(f"{key} must be an array of nonempty strings")
             values[key] = tuple(items)
 
@@ -84,4 +87,6 @@ def load(path: Path = Path("canary.toml")) -> Settings:
             raise ValueError(f"{key} must be a nonnegative integer")
     if type(settings.notify_on_success) is not bool:
         raise ValueError("notify_on_success must be a boolean")
+    from .notifications import validate
+    validate(settings)
     return settings

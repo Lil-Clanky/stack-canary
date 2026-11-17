@@ -5,7 +5,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, config, hermes_verify, maintenance, managed, report, results, schedule, watch
+from . import __version__, config, hermes_verify, maintenance, managed, notifications, report, results, schedule, watch
 from .checks import CHECKS
 from .checks.api import run_checks
 from .runtime_ollama import OllamaRuntime, canary_home
@@ -164,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
     verification = hermes.add_subparsers(dest="action", required=True).add_parser(
         "verify", help="verify foreground B6 and isolation for a tag")
     verification.add_argument("tag")
+    notify = commands.add_parser("notify", help="test configured notification channels")
+    notify.add_argument("--test", action="store_true", required=True)
     args = parser.parse_args(argv)
     if args.command == "run":
         return _run(args)
@@ -180,11 +182,25 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "schedule":
             return schedule.run(args)
+        if args.command == "notify":
+            sent = notifications.send(config.load(), {"status": "test notification"})
+            for channel, status in sent.items():
+                print(f"{channel}: {status}")
+            return 0
         if args.command == "hermes":
             runtime = OllamaRuntime(canary_home(), config.load(), fetch=managed.fetch_url)
             with runtime.exclusive():
                 row = hermes_verify.verify(runtime, args.tag)
-                return 0 if row["status"] == "verified" else 2
+                if row["status"] == "verified":
+                    return 0
+                summary = {"status": "Hermes verification failed", "regressions": [], "infra_errors": [],
+                           "isolation_errors": [args.tag] if row["evidence"]["isolation_incident"] else [],
+                           "new_unverified_hermes": [], "failed_hermes": [args.tag]}
+                path = runtime.root / "hermes-verification-summary.md"
+                if runtime.settings.notify_command:
+                    report._write(path, runtime.root, "# " + notifications.body(summary) + "\n")
+                watch._notify(runtime.settings, summary, path, 2)
+                return 2
         output, drafts = report.generate(args.results, args.out, args.repro_dir, all_models=args.all_models)
     except managed.INFRA_ERRORS as error:
         print(f"canary: {error}", file=sys.stderr)

@@ -189,6 +189,7 @@ def _run(runtime, releases, names, checks, tags, reports):
         ]
         recorded_settings = asdict(runtime.settings)
         recorded_settings.pop("notify_command", None)
+        recorded_settings.pop("ntfy_topic", None)
         report = {
             "schema_version": 2,
             "canary_version": __version__,
