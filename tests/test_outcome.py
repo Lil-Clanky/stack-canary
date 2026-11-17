@@ -26,6 +26,8 @@ def test_invalid_attempts(attempts):
         aggregate(attempts)
 
 
-def test_report_stub(capsys):
-    assert main(["report"]) == 0
-    assert capsys.readouterr().out == "not implemented yet\n"
+def test_report_without_results(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CANARY_HOME", str(tmp_path / "canary-home"))
+    assert main(["report"]) == 2
+    assert "no Stack Canary results found" in capsys.readouterr().err

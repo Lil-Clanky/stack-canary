@@ -5,7 +5,7 @@ The project targets Ollama and Hermes Agent so that changes such as broken tool
 calls or hanging streams can be detected and reported by version, model, and
 check. It measures protocol behavior.
 
-**Status:** v0.1 in progress. Layer A runs five protocol checks in endpoint or managed Ollama mode. The managed workflow has been tested with the bundled fake Ollama. `canary report` prints `not implemented yet`.
+**Status:** v0.1 in progress. Layer A runs five protocol checks in endpoint or managed Ollama mode. The full Layer A matrix passed on the Mac mini. Hermes B6 and the static compatibility report are implemented.
 
 ## Quick start
 
@@ -95,6 +95,12 @@ a problem. If Ollama still holds the configured port after the shutdown
 grace period, the runner reports `stop_failed` or preserves the original
 failure with a shutdown note.
 
+Managed runs compare read-only fingerprints of the existing Ollama store and
+its loopback API, plus the existing Hermes configuration and service metadata.
+A file or API change is reported as `isolation_violated` and gives exit code 2.
+Launchd and listener changes are warnings. Hermes configuration and `.env`
+are compared by SHA-256.
+
 ## Live smoke test (macOS)
 
 From the repository on the Mac mini, preview the plan, then run the newest
@@ -118,11 +124,33 @@ with this option. Use `--checks B6` to run just the harness check.
 canary run --ollama last:1 --hermes latest --models llama3.2:3b --checks A1,A2,A3,A4,A5,B6
 ```
 
-The managed installer creates a dedicated Hermes virtual environment. B6 uses
+The managed installer syncs a tagged Hermes checkout into a dedicated
+virtual environment using its lockfile and an editable source install. B6 uses
 an isolated home, a fresh work directory, and a recording loopback proxy
 forwarding to managed Ollama. It verifies the exact file content and checks
 for a `write_file` event when Hermes supports stream JSON. Failed attempts
 report whether the recorded upstream responses were broken. Cleanup targets
 the launched process group and canary-owned process paths.
+
+## Compatibility report and repro drafts
+
+```sh
+canary report
+canary report --results ~/.stack-canary/results results --out report/index.html --repro-dir repro
+```
+
+The default reads results from `$CANARY_HOME/results` and the repository's
+`results/` directory. Open `report/index.html` in a browser. Rows are Ollama
+versions, newest first. Each model has A1–A5 columns and B6 is grouped by
+Hermes tag. The dots show the recorded attempts. A regression marks a cell
+that passed on the next older Ollama version and now has another outcome.
+The matrix keeps the newest actual result per cell and fills gaps with any
+recorded infrastructure error.
+
+`fail`, `flaky`, and `timeout` cells link to local Markdown drafts under
+`repro/`. The drafts replay the recorded request against a separate Ollama
+store and include the last older version that passed when available. Run
+`canary report` from the repository root to use the default output
+directories. Both output directories are Git-ignored.
 
 See [the project checklist](tasks/todo.md) for planned work.

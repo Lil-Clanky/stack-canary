@@ -1,6 +1,9 @@
 """Write timestamped results as JSON."""
 
 import json
+import platform
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -11,6 +14,24 @@ from .runtime_ollama import safe_path
 
 def run_id() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+
+
+def host_metadata() -> dict:
+    host = {"platform": platform.platform(), "python_version": platform.python_version(),
+            "chip": platform.processor() or platform.machine(), "ram_bytes": None}
+    if sys.platform == "darwin":
+        host["macos"] = platform.mac_ver()[0]
+        try:
+            output = subprocess.check_output(
+                ["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string", "hw.memsize"],
+                text=True, stderr=subprocess.DEVNULL, timeout=2,
+            ).splitlines()
+            if len(output) == 2:
+                host["chip"], memory = output
+                host["ram_bytes"] = int(memory)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    return host
 
 
 def write(directory: Path, result: dict, *, root=None, identifier=None, version=None) -> Path:

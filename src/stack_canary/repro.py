@@ -1,0 +1,155 @@
+"""Render local reproduction drafts from recorded attempts."""
+
+import json
+import re
+import shlex
+from urllib.parse import urlsplit
+
+EXPECTED = {
+    "A1": "HTTP 200 with CANARY in the chat response and a stop finish reason.",
+    "A2": "A valid SSE stream with CANARY, a stop finish reason, and a [DONE] marker.",
+    "A3": "A get_weather tool call with Amsterdam in its JSON arguments.",
+    "A4": "A streamed get_weather tool call with Amsterdam in its JSON arguments and a [DONE] marker.",
+    "A5": "A final response containing 17 after the tool result, without a new tool call.",
+    "B6": "Hermes writes the exact expected contents and emits a write_file event when supported.",
+}
+
+
+def _fence(text, language=""):
+    marker = chr(96) * max(3, max((len(run) + 1 for run in re.findall(r"\x60+", text)), default=3))
+    return f"{marker}{language}\n{text}\n{marker}"
+
+
+def _recorded_request(attempt, *, b6):
+    if not b6:
+        return attempt.get("request") or {}, attempt.get("response")
+    exchanges = attempt.get("proxy_exchanges") or []
+    if not exchanges:
+        return {}, None
+    exchange = next((entry for entry in reversed(exchanges) if entry.get("error")), exchanges[-1])
+    return exchange.get("request") or {}, exchange.get("response")
+
+
+def _request_path(request):
+    url = urlsplit(request.get("path") or request.get("url") or "")
+    if not url.path.startswith("/") or url.path.startswith("//"):
+        return None
+    return url.path + ("?" + url.query if url.query else "")
+
+
+def _curl(request, base, response=None):
+    target = _request_path(request)
+    if not target:
+        return None
+    body = request.get("body")
+    raw = body if isinstance(body, str) else json.dumps(body) if body is not None else None
+    try:
+        payload = json.loads(raw) if raw is not None else None
+    except ValueError:
+        payload = None
+    stream = isinstance(payload, dict) and payload.get("stream") is True
+    args = ["curl", "--noproxy", "*"]
+    if stream or (isinstance(response, dict) and isinstance(response.get("lines"), list)):
+        args.append("-N")
+    args.extend(["-X", request.get("method") or ("POST" if raw is not None else "GET")])
+    if raw is not None:
+        args.extend(["-H", "Content-Type: application/json", "--data-binary", raw])
+    return shlex.join([*args, base + target])
+
+
+def _isolated_commands(name, model, env, request, response):
+    base = "http://127.0.0.1:11535"
+    curl = _curl(request, base, response)
+    if curl is None:
+        return None
+    lines = [
+        "set -eu",
+        'canary_home="${CANARY_HOME:-$HOME/.stack-canary}"',
+        'mkdir -p "$canary_home"',
+        'repro_dir=$(mktemp -d "$canary_home/repro.XXXXXX")',
+        'mkdir -p "$repro_dir/home" "$repro_dir/models" "$repro_dir/tmp"',
+        'export HOME="$repro_dir/home" OLLAMA_MODELS="$repro_dir/models" TMPDIR="$repro_dir/tmp"',
+        "export OLLAMA_HOST=127.0.0.1:11535",
+    ]
+    lines.extend(
+        f"export {key}={shlex.quote(str(value))}" for key, value in sorted(env.items())
+        if re.fullmatch(r"OLLAMA_[A-Z0-9_]+", key) and key not in {"OLLAMA_HOST", "OLLAMA_MODELS"}
+    )
+    lines.extend([
+        "ollama serve &",
+        "server_pid=$!",
+        'trap \'kill "$server_pid" 2>/dev/null || true\' EXIT',
+        "sleep 1",
+        'kill -0 "$server_pid"',
+        shlex.join(["ollama", "pull", name]),
+    ])
+    derived = model.get("derived_model")
+    if derived and derived != name:
+        body = json.dumps({"model": derived, "from": name, "stream": False,
+                           "parameters": {"temperature": 0, "seed": 42}})
+        lines.append(_curl({"path": "/api/create", "method": "POST", "body": body}, base))
+    return "\n".join([*lines, curl])
+
+
+def _masked_argv(args):
+    result = []
+    redact = False
+    for item in args:
+        if redact:
+            result.append("[redacted]")
+        elif item.startswith("--api-key="):
+            result.append("--api-key=[redacted]")
+        else:
+            result.append(item)
+        redact = item == "--api-key"
+    return result
+
+
+def _response_excerpt(response):
+    if not isinstance(response, dict):
+        return "No recorded Ollama response."
+    body = response.get("body")
+    if body is None:
+        body = "".join(line.get("line", "") for line in response.get("lines") or [])
+    excerpt = str(body)[:1600]
+    return f"HTTP status {response.get('status')}\n" + excerpt + ("\n[truncated]" if len(str(body)) > 1600 else "")
+
+
+def render(cell, last_pass):
+    run = cell.run.data
+    model = cell.model
+    runtime = run.get("runtime") or {}
+    host = run.get("host") or {}
+    env = run.get("server_env") or {}
+    check = cell.record["check_id"]
+    b6 = check == "B6"
+    attempt = next((item for item in cell.record.get("attempts", []) if item.get("outcome") != "pass"), {})
+    request, response = _recorded_request(attempt, b6=b6)
+    reason = attempt.get("reason") or cell.record.get("reason") or "not recorded"
+    evidence = {
+        "ollama": cell.run.version, "asset_sha256": runtime.get("sha256"),
+        "macos": host.get("macos") or host.get("platform"), "chip": host.get("chip"),
+        "model": model["name"], "digest": model.get("digest"),
+        "runner": (model.get("gpu") or {}).get("runner"), "server_env": env,
+    }
+    if b6:
+        evidence["hermes_tag"] = cell.tag
+        evidence["hermes_commit"] = cell.harness.get("commit")
+        evidence["masked_argv"] = _masked_argv(attempt.get("argv") or [])
+    commands = _isolated_commands(model["name"], model, env, request, response)
+    sections = [
+        "# DRAFT — not submitted",
+        f"## {check} on Ollama {cell.run.version}",
+        "## Environment",
+        _fence(json.dumps(evidence, indent=2, ensure_ascii=True), "json"),
+        "## Expected and observed",
+        f"Expected {EXPECTED[check]} Observed {cell.outcome} with reason `{reason}`.",
+        f"Last older Ollama version that passed this cell: {last_pass or 'none in the input results'}.",
+        "## Minimal reproduction",
+        "Use the matching standalone Ollama executable and a free port 11535. "
+        "The commands use a temporary store under the canary home.",
+        _fence(commands, "sh") if commands else "This attempt did not capture an Ollama request.",
+        "## Observed response",
+        _fence(_response_excerpt(response), "text"),
+    ]
+    return "\n\n".join(sections) + "\n"

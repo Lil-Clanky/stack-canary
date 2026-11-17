@@ -1,12 +1,11 @@
 """Command-line interface for Stack Canary."""
 
 import argparse
-import platform
 import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, config, managed, results
+from . import __version__, config, managed, report, results
 from .checks import CHECKS
 from .checks.api import run_checks
 from .transport import loopback_url, request
@@ -104,7 +103,7 @@ def _run(args: argparse.Namespace) -> int:
     result = {
         "schema_version": 1,
         "canary_version": __version__,
-        "host": {"platform": platform.platform(), "python_version": platform.python_version()},
+        "host": results.host_metadata(),
         "endpoint": endpoint,
         "runtime_version": version,
         "settings": {
@@ -141,9 +140,17 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--repeats", type=int, help="attempts per model and check (default: 3)")
     run.add_argument("--results-dir", help="output directory (default: results)")
     run.add_argument("--dry-run", action="store_true", help="show the managed plan without writing state")
-    commands.add_parser("report", help="generate a compatibility report")
+    reporting = commands.add_parser("report", help="generate a compatibility report and repro drafts")
+    reporting.add_argument("--results", action="extend", nargs="+", type=Path, metavar="DIR")
+    reporting.add_argument("--out", type=Path, default=Path("report/index.html"))
+    reporting.add_argument("--repro-dir", type=Path, default=Path("repro"))
     args = parser.parse_args(argv)
     if args.command == "run":
         return _run(args)
-    print("not implemented yet")
+    try:
+        output, drafts = report.generate(args.results, args.out, args.repro_dir)
+    except (OSError, ValueError) as error:
+        print(f"canary: {error}", file=sys.stderr)
+        return 2
+    print(f"Report written to {output} ({drafts} repro drafts)")
     return 0

@@ -1,7 +1,6 @@
 """Run Layer A against verified, isolated Ollama releases."""
 
 import http.client
-import platform
 import subprocess
 import sys
 import tarfile
@@ -176,6 +175,7 @@ def _run(runtime, releases, names, checks, tags, reports):
                 harness_errors.append({"tag": tag, **_error(error, "prepare_harness")})
     exit_code = 0
     shared_trace = runtime.disk_trace.copy()
+    host = results.host_metadata()
     for release in releases:
         trace_start = len(runtime.disk_trace)
         version = release.version
@@ -190,7 +190,7 @@ def _run(runtime, releases, names, checks, tags, reports):
         report = {
             "schema_version": 2,
             "canary_version": __version__,
-            "host": {"platform": platform.platform(), "python_version": platform.python_version()},
+            "host": host,
             "runtime": {
                 "version": version, "tag": release.tag, "asset": release.asset_name,
                 "sha256": release.sha256, "path": str(runtime.root / "runtimes/ollama" / version),
@@ -204,6 +204,7 @@ def _run(runtime, releases, names, checks, tags, reports):
             report["master_log"] = master_logs[version]
         if tags:
             metadata = [harness.metadata for harness in harnesses]
+            report["hermes_tags"] = tags
             report["harness"] = metadata[0] if len(metadata) == len(tags) == 1 else {"releases": metadata}
             if harness_errors:
                 report["harness_errors"] = harness_errors
