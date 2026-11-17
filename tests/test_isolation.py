@@ -2,6 +2,8 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from stack_canary import isolation, managed
 from stack_canary.cli import main
 from test_runtime_ollama import home, managed_fixture, port, read_reports, settings
@@ -40,32 +42,51 @@ def test_snapshot_and_diff_only_read_fake_home(tmp_path, monkeypatch):
 
 
 def test_launchd_and_listener_changes_are_warnings():
-    before = {"launchd": {"ollama": 12}, "listeners": {"13": ["n127.0.0.1:9119"]}}
-    after = {"launchd": {"ollama": 14}, "listeners": {"15": ["n127.0.0.1:9119"]}}
+    label = "com.hermes.serve-tailscale"
+    before = {"launchd": {label: 12}, "listeners": {"13": ["n127.0.0.1:9119"]}}
+    after = {"launchd": {label: 14}, "listeners": {"15": ["n127.0.0.1:9119"]}}
     audit = isolation.compare(before, after)
     assert audit["status"] == "warning"
     assert audit["diff"] == {}
     assert set(audit["warnings"]) == {"launchd", "listeners"}
-    assert audit["warnings"]["launchd"] == {"ollama": {"before": 12, "after": 14}}
+    assert audit["warnings"]["launchd"] == {label: {"before": 12, "after": 14}}
 
 
-def test_launchd_registration_and_plist_changes_violate_isolation(tmp_path, monkeypatch):
+def test_spotlight_worker_churn_passes_isolation():
+    before = {"launchd": {"com.ollama": 123, "com.apple.mdworker.shared.old": 12}}
+    after = {"launchd": {"com.ollama": 123, "com.apple.mdworker.shared.new": 14}}
+    assert isolation.compare(before, after) == {"status": "pass", "diff": {}, "warnings": {}}
+
+
+@pytest.mark.parametrize("label", [
+    "com.nousresearch.hermes.runtime.47188799ad44",
+    "com.NOUSRESEARCH.gateway",
+    "com.OLLAMA.server",
+    "local.Stack-Canary.runner",
+])
+def test_relevant_launchd_registration_and_removal_violate_isolation(label):
+    before = {"launchd": {}}
+    after = {"launchd": {label: None}}
+    for original, changed, change in ((before, after, "added"), (after, before, "removed")):
+        audit = isolation.compare(original, changed)
+        assert audit["status"] == "isolation_violated"
+        assert audit["diff"]["launchd"][change] == [label]
+        assert audit["warnings"] == {}
+
+
+def test_all_launch_agent_plist_changes_violate_isolation(tmp_path, monkeypatch):
     monkeypatch.setattr(isolation, "_api", lambda _: None)
-    jobs = {"private.job": 123, "other.job": None}
-    monkeypatch.setattr(isolation, "_services", lambda: (jobs.copy(), None))
+    monkeypatch.setattr(isolation, "_services", lambda: ({}, None))
     agents = tmp_path / "Library/LaunchAgents"
     agents.mkdir(parents=True)
     (agents / "private.plist").write_bytes(b"original")
     before = isolation.snapshot(tmp_path)
-    jobs.clear()
-    jobs.update({"private.job": None, "canary.job": None})
     (agents / "private.plist").write_bytes(b"replaced")
-    (agents / "canary.plist").write_bytes(b"created")
+    (agents / "other.plist").write_bytes(b"created")
     audit = isolation.compare(before, isolation.snapshot(tmp_path))
     assert audit["status"] == "isolation_violated"
-    assert audit["diff"]["launchd"] == {"added": ["canary.job"], "removed": ["other.job"]}
-    assert set(audit["diff"]["launch_agents"]) == {"private.plist", "canary.plist"}
-    assert audit["warnings"]["launchd"] == {"private.job": {"before": 123, "after": None}}
+    assert set(audit["diff"]) == {"launch_agents"}
+    assert set(audit["diff"]["launch_agents"]) == {"private.plist", "other.plist"}
 
 
 def test_config_changes_report_only_nested_key_names(tmp_path, monkeypatch):

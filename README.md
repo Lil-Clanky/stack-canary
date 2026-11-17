@@ -5,7 +5,12 @@ The project targets Ollama and Hermes Agent so that changes such as broken tool
 calls or hanging streams can be detected and reported by version, model, and
 check. It measures protocol behavior.
 
-**Status:** v0.1 in progress. Layer A runs five protocol checks in endpoint or managed Ollama mode. The full Layer A matrix passed on the Mac mini. Hermes B6 and the static compatibility report are implemented.
+## Status v0.1
+
+The full Mac mini matrix passed all 108 attempts across Ollama 0.40.16 and
+0.40.15, three models, and checks A1–A5 and B6. Hermes v0.23.2 ran B6 in
+foreground mode. See the [review](tasks/todo.md#review) for isolation evidence,
+runner and GPU measurements, and known limitations.
 
 ## Quick start
 
@@ -98,9 +103,11 @@ failure with a shutdown note.
 Managed runs take a read-only baseline before release resolution and compare it
 with a final snapshot after cleanup. The audit covers the existing Ollama store
 and its loopback API, Hermes configuration, and service metadata. File or API
-changes, added or removed launchd labels, and changes under
+changes, added or removed relevant launchd labels, and changes under
 `~/Library/LaunchAgents/*.plist` are reported as `isolation_violated` with
-exit code 2. PID changes for existing jobs and listener changes are warnings.
+exit code 2. The label comparison is case-insensitive and matches names
+containing `hermes`, `ollama`, `nousresearch`, or `canary`. PID changes for
+existing matching jobs and listener changes are warnings.
 Hermes configuration and `.env` are compared by SHA-256. The config diff also
 lists changed YAML mapping keys without their values.
 

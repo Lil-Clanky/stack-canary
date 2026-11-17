@@ -11,6 +11,9 @@ import sys
 from pathlib import Path
 
 
+_RELEVANT_LAUNCHD_LABEL = re.compile(r"hermes|ollama|nousresearch|canary", re.IGNORECASE)
+
+
 def _json_key(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -226,10 +229,18 @@ def snapshot(home=None):
     }
 
 
+def _relevant_launchd_jobs(jobs):
+    if jobs is None:
+        return None
+    return {label: pid for label, pid in jobs.items() if _RELEVANT_LAUNCHD_LABEL.search(label)}
+
+
 def compare(before, after):
     diff, warnings = {}, {}
     for key in before.keys() | after.keys():
         previous, current = before.get(key), after.get(key)
+        if key == "launchd":
+            previous, current = _relevant_launchd_jobs(previous), _relevant_launchd_jobs(current)
         if previous != current:
             target = warnings if key in {"launchd", "listeners"} else diff
             if key == "hermes_config_keys":
