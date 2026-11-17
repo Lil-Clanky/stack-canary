@@ -10,6 +10,7 @@ from fake_ollama import running
 from stack_canary.checks.api import run_attempt
 from stack_canary.cli import main
 from stack_canary.report import load_runs, merge
+from stack_canary.repro import DRAFT_MARKER
 from test_runtime_ollama import home
 
 TAG = "v0.23.2"
@@ -21,9 +22,9 @@ def _check(check, outcome, *, attempts=(), **fields):
     return {"check_id": check, "outcome": outcome, "attempts": list(attempts), **fields}
 
 
-def _record(directory, stamp, version, checks, **fields):
+def _record(directory, stamp, version, checks, *, model_name="a", **fields):
     directory.mkdir(parents=True, exist_ok=True)
-    model = {"name": "a", "digest": "sha256:" + SHA, "derived_model": "canary-a",
+    model = {"name": model_name, "digest": "sha256:" + SHA, "derived_model": "canary-" + model_name,
              "source": "present", "gpu": {"runner": "llamacpp", "offload": 1.0},
              "checks": checks}
     result = {
@@ -120,3 +121,53 @@ def test_report_refuses_output_outside_allowed_directories(home, capsys):
     assert main(["report", "--out", "outside.html"]) == 2
     assert "output must stay" in capsys.readouterr().err
     assert not Path("outside.html").exists()
+
+
+def test_report_prunes_only_its_stale_drafts(home):
+    directory = Path("repro")
+    directory.mkdir()
+    original = directory / "2026-11-15_ollama-0.40.16_a_A1.md"
+    original.write_text("# My notes\n", encoding="utf-8")
+    unchanged = directory / "old.md"
+    unchanged.write_text("# DRAFT — not submitted\n" + DRAFT_MARKER + "\n", encoding="utf-8")
+    _record(home / "results", "20261115T120000Z", "0.40.16", [_check("A1", "fail")])
+    assert main(["report"]) == 0
+    generated = directory / "2026-11-15_ollama-0.40.16_a_A1_2.md"
+    assert generated.read_text(encoding="utf-8").splitlines()[0] == DRAFT_MARKER
+    assert original.read_text(encoding="utf-8") == "# My notes\n"
+    assert main(["report"]) == 0
+    assert generated.exists()
+    _record(home / "results", "20261116T120000Z", "0.40.16", [_check("A1", "pass")])
+    assert main(["report"]) == 0
+    assert set(directory.iterdir()) == {original, unchanged}
+
+
+def test_report_defaults_to_the_latest_managed_models(home):
+    directory = home / "results"
+    _record(directory, "20261115T120000Z", "0.40.15", [_check("A1", "fail")], model_name="tev1:4b")
+    _record(directory, "20261116T120000Z", "0.40.16", [_check("A1", "pass")], model_name="llama3.2:3b")
+    (directory / "20261117T120000Z_endpoint.json").write_text(json.dumps({
+        "schema_version": 1, "runtime_version": "0.40.16",
+        "models": [{"name": "endpoint-only", "checks": [_check("A1", "pass")]}],
+    }), encoding="utf-8")
+    assert main(["report", "--all-models"]) == 0
+    page = Path("report/index.html")
+    assert "tev1:4b" in page.read_text(encoding="utf-8")
+    assert len(list(Path("repro").glob("*.md"))) == 1
+    assert main(["report"]) == 0
+    html = page.read_text(encoding="utf-8")
+    assert "llama3.2:3b" in html and "tev1:4b" not in html and "endpoint-only" not in html
+    assert not list(Path("repro").glob("*.md"))
+
+
+def test_historical_cli_rejection_is_not_an_upstream_failure(home):
+    before = {"outcome": "fail", "reason": "file_missing", "attribution": "harness",
+              "exit_code": 1, "stderr_tail": ["Error: Unsupported gateway CLI options: --run-budget."],
+              "proxy_exchanges": []}
+    _record(home / "results", "20261115T120000Z", "0.40.16", [_check("B6", "fail", attempts=[before])])
+    cells, _, _ = merge(load_runs([home / "results"]))
+    check = cells["0.40.16", "a", "B6", TAG].record
+    assert (check["outcome"], check["reason"]) == ("error", "harness_cli_rejected")
+    assert check["attempts"][0]["attribution"] == "canary"
+    assert main(["report"]) == 0
+    assert not list(Path("repro").glob("*.md"))

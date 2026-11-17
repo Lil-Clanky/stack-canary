@@ -125,8 +125,30 @@ canary run --ollama last:1 --hermes latest --models llama3.2:3b --checks A1,A2,A
 ```
 
 The managed installer syncs a tagged Hermes checkout into a dedicated
-virtual environment using its lockfile and an editable source install. B6 uses
-an isolated home, a fresh work directory, and a recording loopback proxy
+virtual environment using its lockfile and an editable source install. It
+reads the required Python minor from `.python-version` or the Hermes PM lock,
+then verifies an interpreter from the parent PATH. If needed, uv installs
+that minor inside `CANARY_HOME/uv-python`. The install uses the interpreter's
+absolute path and records the exact version in the harness metadata.
+
+For Hermes v0.23.2, the B6 one-shot gateway accepts the following options
+when advertised by the installed command's help. Canary uses the absolute
+launcher path in its private Hermes virtual environment.
+
+```sh
+"$CANARY_HERMES" chat --oneshot --provider custom --base-url "$PROXY_URL" -m "$MODEL" -t file \
+  --query-file "$QUERY" -Q --format stream-json --safe-mode \
+  --api-key stack-canary-loopback --reasoning none --max-turns 8 \
+  --yolo --source tool --in "$WORKDIR"
+```
+
+The gateway's [v0.23.2 option validation](https://github.com/NousResearch/hermes-agent/blob/v0.23.2/hermes_cli/gateway_chat.py#L13-L31)
+rejects `--run-budget`. Canary enforces its own deadline and cleanup. A CLI
+rejection before the first proxied request is `error` with reason
+`harness_cli_rejected` and attribution `canary`. Other failures before the
+first request retain harness attribution and record `before_first_request`.
+
+B6 uses an isolated home, a fresh work directory, and a recording loopback proxy
 forwarding to managed Ollama. It verifies the exact file content and checks
 for a `write_file` event when Hermes supports stream JSON. Failed attempts
 report whether the recorded upstream responses were broken. Cleanup targets
@@ -141,15 +163,18 @@ canary report --results ~/.stack-canary/results results --out report/index.html 
 
 The default reads results from `$CANARY_HOME/results` and the repository's
 `results/` directory. Open `report/index.html` in a browser. Rows are Ollama
-versions, newest first. Each model has A1–A5 columns and B6 is grouped by
-Hermes tag. The dots show the recorded attempts. A regression marks a cell
+versions, newest first. The newest managed run determines which models are
+shown. Use `--all-models` to include historical models. Each model has A1–A5
+columns and one B6 column per Hermes tag. The dots show the recorded attempts. A regression marks a cell
 that passed on the next older Ollama version and now has another outcome.
 The matrix keeps the newest actual result per cell and fills gaps with any
 recorded infrastructure error.
 
 `fail`, `flaky`, and `timeout` cells link to local Markdown drafts under
 `repro/`. The drafts replay the recorded request against a separate Ollama
-store and include the last older version that passed when available. Run
+store and include the last older version that passed when available. The
+report removes stale drafts bearing its ownership marker and leaves
+unmarked files intact. Run
 `canary report` from the repository root to use the default output
 directories. Both output directories are Git-ignored.
 

@@ -144,11 +144,12 @@ def main(argv: list[str] | None = None) -> int:
     reporting.add_argument("--results", action="extend", nargs="+", type=Path, metavar="DIR")
     reporting.add_argument("--out", type=Path, default=Path("report/index.html"))
     reporting.add_argument("--repro-dir", type=Path, default=Path("repro"))
+    reporting.add_argument("--all-models", action="store_true", help="include models from older runs")
     args = parser.parse_args(argv)
     if args.command == "run":
         return _run(args)
     try:
-        output, drafts = report.generate(args.results, args.out, args.repro_dir)
+        output, drafts = report.generate(args.results, args.out, args.repro_dir, all_models=args.all_models)
     except (OSError, ValueError) as error:
         print(f"canary: {error}", file=sys.stderr)
         return 2

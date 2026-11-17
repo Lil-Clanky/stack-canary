@@ -221,7 +221,8 @@ def _run(runtime, releases, names, checks, tags, reports):
             report["infra_error"] = failures[version]
             print(f"Ollama {version}: {failures[version]['message']}", file=sys.stderr)
             exit_code = 2
-        elif any("model_error" in model for model in models):
+        elif any("model_error" in model or any(check["outcome"] == "error" for check in model["checks"])
+                 for model in models):
             exit_code = 2
         elif any(check["outcome"] not in {"pass", "n/a"} for model in models for check in model["checks"]):
             exit_code = max(exit_code, 1)

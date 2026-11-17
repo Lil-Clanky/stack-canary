@@ -14,6 +14,7 @@ from stack_canary.outcome import aggregate
         (["pass", "fail", "timeout"], "flaky"),
         (["fail", "fail", "fail"], "fail"),
         (["timeout", "fail", "timeout"], "fail"),
+        (["error", "fail", "pass"], "error"),
     ],
 )
 def test_aggregate(attempts, expected):

@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from . import __version__, repro
 from .checks import CHECKS
+from .harness_hermes import invocation_rejected
 from .releases import version_key
 from .runtime_ollama import canary_home, safe_path
 
@@ -140,6 +141,17 @@ def _remember(cells, cell):
         cells[key] = cell
 
 
+def _normalize_b6(record):
+    attempts = [
+        {**attempt, "outcome": "error", "reason": "harness_cli_rejected", "attribution": "canary"}
+        if invocation_rejected(attempt) else attempt
+        for attempt in record.get("attempts") or []
+    ]
+    if any(attempt.get("reason") == "harness_cli_rejected" for attempt in attempts):
+        return {**record, "outcome": "error", "reason": "harness_cli_rejected", "attempts": attempts}
+    return record
+
+
 def merge(runs):
     cells, models, harnesses = {}, {}, {}
     for run in runs:
@@ -152,7 +164,10 @@ def merge(runs):
             if not isinstance(model, dict) or not isinstance(model.get("name"), str):
                 continue
             key = (run.version, model["name"])
-            records = model.get("checks") or []
+            records = [
+                _normalize_b6(record) if record.get("check_id") == "B6" else record
+                for record in model.get("checks") or []
+            ]
             if key not in models or any(
                 record.get("outcome") in OUTCOMES and record["outcome"] != "error" for record in records
             ):
@@ -217,6 +232,17 @@ def _slug(value):
     return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-") or "unknown"
 
 
+def _owned_draft(path):
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        with path.open("rb") as file:
+            marker = repro.DRAFT_MARKER.encode("utf-8")
+            return file.readline(len(marker) + 3).rstrip(b"\r\n") == marker
+    except OSError:
+        return False
+
+
 def _drafts(cells, versions, directory, scope):
     links = {}
     claimed = set()
@@ -233,12 +259,15 @@ def _drafts(cells, versions, directory, scope):
             slug += "_" + _slug(tag)
         path = directory / f"{slug}.md"
         suffix = 2
-        while path.name.casefold() in claimed:
+        while path.name.casefold() in claimed or (os.path.lexists(path) and not _owned_draft(path)):
             path = directory / f"{slug}_{suffix}.md"
             suffix += 1
         claimed.add(path.name.casefold())
         _write(path, scope, repro.render(cell, last_pass))
         links[key] = path
+    for path in directory.glob("*.md"):
+        if path.name.casefold() not in claimed and _owned_draft(path) and safe_path(scope, path) == path:
+            path.unlink(missing_ok=True)
     return links
 
 
@@ -330,7 +359,7 @@ def _matrix(versions, names, columns, cells, models, drafts, output):
     return f'<div class="scroll"><table><thead>{title}<tr>{labels}</tr></thead>{"".join(rows)}</table></div>'
 
 
-def generate(directories=None, output=Path("report/index.html"), repro_dir=Path("repro")):
+def generate(directories=None, output=Path("report/index.html"), repro_dir=Path("repro"), *, all_models=False):
     root = canary_home()
     cwd = Path.cwd().resolve()
     output, report_scope = _scope(output, root, cwd / "report")
@@ -340,8 +369,15 @@ def generate(directories=None, output=Path("report/index.html"), repro_dir=Path(
         raise ValueError("no Stack Canary results found")
     cells, models, harnesses = merge(runs)
     versions = sorted({run.version for run in runs}, key=_version_order, reverse=True)
-    names = sorted({name for _, name in models})
     tags = {tag for _, _, check, tag in cells if check == "B6"} or {""}
+    if all_models:
+        names = sorted({name for _, name in models})
+    else:
+        latest = next((run for run in reversed(runs) if isinstance(run.data.get("runtime"), dict)), runs[-1])
+        names = sorted({model["name"] for model in latest.data["models"]
+                        if isinstance(model, dict) and isinstance(model.get("name"), str)})
+        visible = set(names)
+        cells = {key: cell for key, cell in cells.items() if key[1] in visible}
     columns = [(check, "") for check in CHECKS] + [
         ("B6", tag) for tag in sorted(tags, key=_version_order, reverse=True)
     ]

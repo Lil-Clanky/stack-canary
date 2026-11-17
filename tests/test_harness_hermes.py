@@ -13,6 +13,7 @@ from stack_canary import harness_hermes, managed
 from stack_canary.cli import main
 from stack_canary.config import Settings
 from stack_canary.harness_hermes import HermesHarness, hermes_env, hermes_tags
+from stack_canary.runtime_ollama import OllamaError
 from test_runtime_ollama import home, managed_fixture, port, read_reports, settings
 
 SOURCE = Path(__file__).with_name("fake_hermes.py")
@@ -69,6 +70,7 @@ def test_install_uses_editable_checkout(home, monkeypatch, has_lock):
     tag = "v0.23.2"
     prefix = home / "harnesses/hermes" / tag
     src, venv = prefix / "src", prefix / "venv"
+    interpreter = home / "python3.14"
     for directory in (src, venv):
         directory.mkdir(parents=True)
         (directory / "partial").touch()
@@ -105,14 +107,90 @@ def test_install_uses_editable_checkout(home, monkeypatch, has_lock):
 
     monkeypatch.setattr(harness_hermes, "_run", run)
     monkeypatch.setattr(harness_hermes.shutil, "which", lambda _: "uv")
+
+    def select(minor, cwd, env, uv):
+        assert (minor, cwd, uv) == ("3.14", src, "uv")
+        return str(interpreter)
+
+    monkeypatch.setattr(harness_hermes, "_interpreter", select)
     _, metadata = harness_hermes._install(home, tag, lambda _: None)
     if has_lock:
-        assert commands == [["sync", "--frozen", "--no-default-groups", "--python", "3.14.9", "--extra", "all"]]
+        assert commands == [["sync", "--frozen", "--no-default-groups", "--python",
+                             str(interpreter), "--extra", "all"]]
         assert metadata["install_method"] == "uv_sync_editable"
     else:
         assert commands[-1][-2:] == ["-e", f"{src}[all]"]
         assert metadata["install_method"] == "uv_pip_editable"
     assert json.loads((prefix / ".complete").read_text()) == metadata
+    assert metadata["python_version"] == "Python 3.14.9"
+
+
+def test_gateway_flags_intersect_help_and_source(home):
+    home.mkdir()
+    source = home / "gateway_chat.py"
+    source.write_text('_UNSUPPORTED = ("run_budget", "max_turns", "w")\n', encoding="utf-8")
+    help_text = "--oneshot --provider --base-url -m -t --query-file --format stream-json --run-budget --max-turns --yolo"
+    allowed = harness_hermes._gateway_options(home, source)
+    assert "--in" in allowed
+    actual = harness_hermes.detected_flags(help_text, allowed)
+    assert actual == {"--oneshot", "--provider", "--base-url", "-m", "-t", "--query-file", "--format", "--yolo"}
+    assert harness_hermes.detected_flags(help_text, {"-m", "--in"}) == {"-m"}
+
+
+def test_interpreter_prefers_matching_parent_path(home, monkeypatch):
+    older, correct = home / "mislabeled", home / "python"
+    monkeypatch.setattr(harness_hermes.shutil, "which",
+                        {"python3.14": str(older), "python": str(correct)}.get)
+    commands = []
+
+    def run(argv, cwd, env, *, timeout):
+        commands.append(argv)
+        return "Python 3.13.4" if argv[0] == str(older) else "Python 3.14.2"
+
+    monkeypatch.setattr(harness_hermes, "_run", run)
+    assert harness_hermes._interpreter("3.14", home, {}, "uv") == str(correct)
+    assert commands == [[str(older), "--version"], [str(correct), "--version"]]
+
+
+def test_interpreter_installs_minor_in_canary_home(home, monkeypatch):
+    monkeypatch.setattr(harness_hermes.shutil, "which", lambda _: None)
+    directory = home / "uv-python"
+    executable = directory / "cpython-3.14.2" / "python"
+    env = {"UV_PYTHON_INSTALL_DIR": str(directory)}
+    commands = []
+
+    def run(argv, cwd, passed_env, *, timeout):
+        assert passed_env == env
+        commands.append(argv)
+        if argv[0] == str(executable):
+            return "Python 3.14.2"
+        if argv[2] == "install":
+            executable.parent.mkdir(parents=True)
+            executable.touch()
+            return ""
+        return str(executable)
+
+    monkeypatch.setattr(harness_hermes, "_run", run)
+    assert harness_hermes._interpreter("3.14", home, env, "uv") == str(executable)
+    assert commands == [
+        ["uv", "python", "install", "--no-bin", "--no-registry", "3.14"],
+        ["uv", "python", "find", "--managed-python", "--no-project", "3.14"],
+        [str(executable), "--version"],
+    ]
+
+
+@pytest.mark.parametrize("uv", [None, "uv"])
+def test_interpreter_failure_is_a_clear_setup_error(home, monkeypatch, uv):
+    monkeypatch.setattr(harness_hermes.shutil, "which", lambda _: None)
+
+    def fail(*args, **kwargs):
+        raise OSError("fixture interpreter install failed")
+
+    monkeypatch.setattr(harness_hermes, "_run", fail)
+    with pytest.raises(OllamaError, match="Python 3.14") as error:
+        harness_hermes._interpreter("3.14", home, {}, uv)
+    assert error.value.code == "hermes_setup_failed"
+    assert ("fixture interpreter install failed" if uv else "uv is unavailable") in str(error.value)
 
 
 def test_failed_install_leaves_no_completion_marker(home, monkeypatch):
@@ -137,6 +215,29 @@ def test_failed_install_leaves_no_completion_marker(home, monkeypatch):
     assert not (prefix / ".complete.part").exists()
 
 
+def test_cached_harness_rebuilds_when_venv_python_disappears(home, monkeypatch):
+    tag = "v0.23.2"
+    prefix = home / "harnesses/hermes" / tag
+    src, venv = prefix / "src", prefix / "venv"
+    src.mkdir(parents=True)
+    executable = harness_hermes._bin(venv, "hermes")
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    marker = prefix / ".complete"
+    marker.write_text(json.dumps({"install_method": "uv_sync_editable", "python_version": "Python 3.14.9"}))
+
+    def run(argv, cwd, env, *, timeout):
+        if argv[-1] == "--version":
+            raise FileNotFoundError("the venv's interpreter is gone")
+        assert argv[:2] == ["git", "clone"]
+        assert not src.exists() and not venv.exists() and not marker.exists()
+        raise OSError("fixture reached fresh clone")
+
+    monkeypatch.setattr(harness_hermes, "_run", run)
+    with pytest.raises(OSError, match="fixture reached fresh clone"):
+        harness_hermes._install(home, tag, lambda _: None)
+
+
 @pytest.mark.parametrize(("mode", "reason"), [
     ("ok", None), ("wrong_content", "file_mismatch"), ("no_file", "file_missing"),
     ("no_write_event", "no_write_event"), ("nonzero_exit", "harness_exit_nonzero"),
@@ -150,6 +251,8 @@ def test_b6_attempt_modes(home, settings, mode, reason):
         attempt = harness.attempt(upstream.endpoint, "a", 1)
     assert attempt["reason"] == reason
     assert attempt["attribution"] == ("harness" if reason else None)
+    if mode in {"hang", "unsupported_cli"}:
+        assert attempt["note"] == "before_first_request"
     assert harness_hermes.API_KEY not in attempt["argv"]
     if mode == "leftover_child":
         child, = [event["pid"] for event in attempt["events"] if event["type"] == "fixture_child"]
@@ -187,3 +290,23 @@ def test_managed_b6_end_to_end(home, settings, monkeypatch):
     assert check["check_id"] == "B6"
     assert check["outcome"] == "pass"
     assert check["attempts"][0]["proxy_exchanges"][0]["response"]["status"] == 200
+
+
+def test_rejected_hermes_invocation_is_an_error_without_a_repro(home, settings, monkeypatch):
+    managed_fixture(monkeypatch, settings)
+    monkeypatch.setattr(managed, "hermes_tags", lambda spec, **kwargs: [TAG])
+    monkeypatch.setattr(managed, "HermesHarness",
+                        lambda *args: fake_harness(*args, mode="cli_usage"))
+    assert main(["run", "--ollama", "last:1", "--hermes", "latest", "--models", "x",
+                 "--checks", "B6", "--repeats", "1"]) == 2
+    check, = read_reports(home)["1.10.0"]["models"][0]["checks"]
+    assert check["outcome"] == "error"
+    attempt, = check["attempts"]
+    assert attempt["exit_code"] == 2 and attempt["proxy_exchanges"] == []
+    assert (attempt["outcome"], attempt["reason"], attempt["attribution"]) == (
+        "error", "harness_cli_rejected", "canary",
+    )
+    assert "--run-budget" not in attempt["argv"]
+    assert main(["report"]) == 0
+    assert "harness_cli_rejected" in Path("report/index.html").read_text(encoding="utf-8")
+    assert not list(Path("repro").glob("*.md"))

@@ -1,5 +1,6 @@
 """Install tagged Hermes releases and run the isolated B6 file-write check."""
 
+import ast
 import json
 import os
 import re
@@ -26,8 +27,10 @@ API = "https://api.github.com/repos/NousResearch/hermes-agent/releases"
 REQUIRED = {"--oneshot", "--provider", "--base-url", "-m", "-t"}
 OPTIONAL = {
     "-Q", "--format", "--safe-mode", "--api-key", "--reasoning", "--max-turns",
-    "--run-budget", "--yolo", "--source", "--in",
+    "--yolo", "--source", "--in",
 }
+GATEWAY_OPTIONS = REQUIRED | OPTIONAL | {"--query-file", "-q"}
+CLI_REJECTION = re.compile(r"(?im)^\s*(?:error:\s*)?(?:unsupported\b[^\n]*\boptions\b|usage\s*:)")
 API_KEY = "stack-canary-loopback"
 
 
@@ -122,17 +125,54 @@ def _bin(venv, name):
     return venv / ("Scripts" if os.name == "nt" else "bin") / (name + ".exe" if os.name == "nt" else name)
 
 
+def _python_minor(root, src):
+    version_file = safe_path(root, src / ".python-version")
+    lock = safe_path(root, src / "pm/lock.json")
+    pins = []
+    if version_file.is_file():
+        pins.append(version_file.read_text(encoding="utf-8").strip())
+    if lock.is_file():
+        pins.append(json.loads(lock.read_text(encoding="utf-8")).get("packages", {}).get("python", {}).get("version"))
+    for pin in pins:
+        if isinstance(pin, str) and (match := re.fullmatch(r"(3\.\d+)(?:\.\d+)?(?:\+\d+)?", pin)):
+            return match[1]
+    return "3.13"
+
+
+def _matching_python(path, minor, src, env):
+    try:
+        version = _run([str(path), "--version"], src, env, timeout=10)
+    except (OllamaError, OSError, subprocess.SubprocessError):
+        return False
+    return re.match(rf"Python {re.escape(minor)}(?:[.\s]|$)", version) is not None
+
+
+def _interpreter(minor, src, env, uv):
+    paths = dict.fromkeys(shutil.which(name) for name in (f"python{minor}", "python3", "python"))
+    for path in paths:
+        if path:
+            absolute = Path(path).absolute()
+            if _matching_python(absolute, minor, src, env):
+                return str(absolute)
+    if not uv:
+        raise OllamaError("hermes_setup_failed", f"Python {minor} is not on PATH and uv is unavailable")
+    try:
+        _run([uv, "python", "install", "--no-bin", "--no-registry", minor], src, env, timeout=600)
+        found = Path(_run([uv, "python", "find", "--managed-python", "--no-project", minor],
+                          src, env, timeout=30))
+        directory = Path(env["UV_PYTHON_INSTALL_DIR"])
+        if found.is_absolute() and safe_path(directory, found).is_file() and _matching_python(found, minor, src, env):
+            return str(found)
+        raise ValueError("uv did not find a matching interpreter in the canary Python directory")
+    except (OllamaError, OSError, ValueError, subprocess.SubprocessError) as error:
+        raise OllamaError("hermes_setup_failed", f"could not find or install Python {minor}: {error}") from error
+
+
 def _dependencies(root, src, venv, env):
     with safe_path(root, src / "pyproject.toml").open("rb") as file:
         project = tomllib.load(file)["project"]
     extra = "all" if "all" in project.get("optional-dependencies", {}) else None
     requirement = str(src) + (f"[{extra}]" if extra else "")
-    lock = safe_path(root, src / "pm/lock.json")
-    python_version = "3.13"
-    if lock.is_file():
-        pin = json.loads(lock.read_text(encoding="utf-8")).get("packages", {}).get("python", {}).get("version")
-        if isinstance(pin, str) and re.fullmatch(r"3\.\d+(?:\.\d+)?(?:\+\d+)?", pin):
-            python_version = pin.split("+", 1)[0]
 
     python = _bin(venv, "python")
     if uv := shutil.which("uv"):
@@ -141,22 +181,18 @@ def _dependencies(root, src, venv, env):
             "UV_PYTHON_INSTALL_DIR": str(_canary_dir(root, Path("uv-python"))),
             "UV_PROJECT_ENVIRONMENT": str(venv),
         })
+    interpreter = _interpreter(_python_minor(root, src), src, env, uv)
+    if uv:
         if safe_path(root, src / "uv.lock").is_file():
-            args = [uv, "sync", "--frozen", "--no-default-groups", "--python", python_version]
+            args = [uv, "sync", "--frozen", "--no-default-groups", "--python", interpreter]
             if extra:
                 args.extend(["--extra", extra])
             _run(args, src, env, timeout=1200)
             return "uv_sync_editable"
-        _run([uv, "venv", "--python", python_version, str(venv)], src, env, timeout=600)
+        _run([uv, "venv", "--python", interpreter, str(venv)], src, env, timeout=600)
         _run([uv, "pip", "install", "--python", str(python), "-e", requirement], src, env, timeout=1200)
         return "uv_pip_editable"
 
-    minor = python_version.split(".")[:2]
-    interpreter = shutil.which("python" + ".".join(minor))
-    if not interpreter and [str(part) for part in sys.version_info[:2]] == minor:
-        interpreter = sys.executable
-    if not interpreter:
-        raise OllamaError("hermes_setup_failed", f"Hermes requires uv or Python {'.'.join(minor)}")
     _run([interpreter, "-m", "venv", str(venv)], src, env, timeout=600)
     _run([str(python), "-m", "pip", "install", "-e", requirement], src, env, timeout=1200)
     return "pip_editable"
@@ -177,7 +213,13 @@ def _install(root, tag, guard):
     if marker.is_file() and executable.is_file():
         metadata = json.loads(marker.read_text(encoding="utf-8"))
         if metadata.get("install_method"):
-            return executable, metadata
+            try:
+                version = _run([str(python), "--version"], prefix, env, timeout=10)
+            except (OllamaError, OSError, subprocess.SubprocessError):
+                pass
+            else:
+                if version == metadata.get("python_version"):
+                    return executable, metadata
 
     guard("clone Hermes source")
     marker.unlink(missing_ok=True)
@@ -203,12 +245,40 @@ def _install(root, tag, guard):
     return executable, metadata
 
 
-def detected_flags(help_text):
+def _gateway_options(root, source):
+    """Apply the checked-out gateway's refusal list without importing Hermes."""
+    source = safe_path(root, source)
+    if not source.is_file():
+        return GATEWAY_OPTIONS
+    aliases = {"model": "-m", "toolsets": "-t", "quiet": "-Q", "query": "-q",
+               "in_dir": "--in", "oneshot_exit": "--oneshot", "output_format": "--format"}
+    for node in ast.parse(source.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "_UNSUPPORTED" for target in node.targets
+        ):
+            names = ast.literal_eval(node.value)
+            blocked = {("-" if len(name) == 1 else "--") + name.replace("_", "-") for name in names}
+            blocked.update(aliases[name] for name in names if name in aliases)
+            return GATEWAY_OPTIONS - blocked
+    return GATEWAY_OPTIONS
+
+
+def detected_flags(help_text, gateway_options=GATEWAY_OPTIONS):
     flags = set(re.findall(r"(?<![\w-])(?:--[a-z][a-z0-9-]*|-[A-Za-z])(?![\w-])", help_text))
-    flags.intersection_update(REQUIRED | OPTIONAL | {"--query-file", "-q"})
+    flags.intersection_update(gateway_options)
     if "stream-json" not in help_text:
         flags.discard("--format")
     return flags
+
+
+def invocation_rejected(evidence):
+    if evidence.get("proxy_exchanges"):
+        return False
+    if evidence.get("exit_code") == 2 or evidence.get("cli_diagnostic"):
+        return True
+    messages = [*(evidence.get("stderr_tail") or []),
+                *(event.get("error") for event in evidence.get("events") or [])]
+    return any(isinstance(message, str) and CLI_REJECTION.search(message) for message in messages)
 
 
 def _local_ollama_name():
@@ -307,7 +377,8 @@ class HermesHarness:
         work = _canary_dir(root, Path("attempts") / f"hermes-{tag}")
         self.bindir = executable.parent
         help_text = _run([*self.argv, "chat", "--help"], work, self._env(work), timeout=30)
-        self.flags = detected_flags(help_text)
+        source = self.venv.parent / "src/hermes_cli/gateway_chat.py"
+        self.flags = detected_flags(help_text, _gateway_options(root, source))
         self.supported = REQUIRED <= self.flags and bool({"--query-file", "-q"} & self.flags)
         self.metadata = {**self.metadata, "flags": sorted(self.flags)}
 
@@ -321,8 +392,11 @@ class HermesHarness:
             self.attempt(endpoint, model, attempt)
             for attempt in range(1, self.settings.repeats + 1)
         ]
-        return {"check_id": "B6", "outcome": aggregate(item["outcome"] for item in attempts),
-                "attempts": attempts}
+        outcome = aggregate(item["outcome"] for item in attempts)
+        record = {"check_id": "B6", "outcome": outcome, "attempts": attempts}
+        if outcome == "error":
+            record["reason"] = "harness_cli_rejected"
+        return record
 
     def attempt(self, endpoint, model, attempt):
         started = time.monotonic()
@@ -330,11 +404,17 @@ class HermesHarness:
                     "file_bytes": None, "proxy_exchanges": [], "leftover_processes": [],
                     "hermes_sees_ollama": False, "attribution": "harness"}
         reason = self._execute(endpoint, model, evidence) if self.supported else "harness_cli_unsupported"
-        if any(exchange["error"] for exchange in evidence["proxy_exchanges"]):
+        if invocation_rejected(evidence):
+            reason = "harness_cli_rejected"
+            evidence["attribution"] = "canary"
+        elif any(exchange["error"] for exchange in evidence["proxy_exchanges"]):
             evidence["attribution"] = "runtime"
         elif reason is None:
             evidence["attribution"] = None
-        outcome = "timeout" if reason == "timeout_deadline" else "fail" if reason else "pass"
+        elif not evidence["proxy_exchanges"]:
+            evidence["note"] = "before_first_request"
+        outcome = ("error" if reason == "harness_cli_rejected" else
+                   "timeout" if reason == "timeout_deadline" else "fail" if reason else "pass")
         return {"check_id": "B6", "attempt": attempt, "outcome": outcome, "reason": reason,
                 "duration_s": time.monotonic() - started, **evidence}
 
@@ -345,7 +425,6 @@ class HermesHarness:
         optional = {
             "-Q": [], "--format": ["stream-json"], "--safe-mode": [], "--api-key": [API_KEY],
             "--reasoning": ["none"], "--max-turns": ["8"],
-            "--run-budget": [str(max(1, int(self.settings.hermes_deadline_s - 30)))],
             "--yolo": [], "--source": ["tool"], "--in": [str(workdir)],
         }
         for flag, values in optional.items():
@@ -387,6 +466,13 @@ class HermesHarness:
         evidence["proxy_exchanges"] = proxy.exchanges
         with stderr.open(encoding="utf-8", errors="replace") as log:
             evidence["stderr_tail"] = [line.rstrip() for line in deque(log, maxlen=30)]
+        if not evidence["proxy_exchanges"]:
+            for path in (stderr, stdout):
+                with path.open(encoding="utf-8", errors="replace") as log:
+                    diagnostic = next((line.strip() for line in log if CLI_REJECTION.search(line)), None)
+                if diagnostic:
+                    evidence["cli_diagnostic"] = diagnostic
+                    break
         if "--format" in self.flags:
             with stdout.open(encoding="utf-8", errors="replace") as log:
                 for line in log:

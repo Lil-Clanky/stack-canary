@@ -27,6 +27,9 @@ def main():
         return 0
     if mode == "hang":
         time.sleep(120)
+    if mode == "cli_usage":
+        print("usage: hermes chat [options]", file=sys.stderr)
+        return 2
     base = args[args.index("--base-url") + 1]
     model = args[args.index("-m") + 1]
     query = Path(args[args.index("--query-file") + 1]).read_text()

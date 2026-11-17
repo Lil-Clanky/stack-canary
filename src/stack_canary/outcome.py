@@ -3,14 +3,16 @@
 from collections.abc import Iterable
 from typing import Literal
 
-AttemptOutcome = Literal["pass", "fail", "timeout"]
+AttemptOutcome = Literal["pass", "fail", "timeout", "error"]
 CheckOutcome = Literal["pass", "fail", "timeout", "flaky", "error", "n/a"]
 
 
 def aggregate(attempts: Iterable[AttemptOutcome]) -> CheckOutcome:
     outcomes = set(attempts)
-    if not outcomes or not outcomes <= {"pass", "fail", "timeout"}:
+    if not outcomes or not outcomes <= {"pass", "fail", "timeout", "error"}:
         raise ValueError("expected at least one valid attempt outcome")
+    if "error" in outcomes:
+        return "error"
     if outcomes == {"pass"}:
         return "pass"
     if outcomes == {"timeout"}:
