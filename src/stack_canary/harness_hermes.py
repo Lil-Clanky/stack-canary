@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from collections import deque
 from contextlib import suppress
 from pathlib import Path
@@ -121,6 +122,46 @@ def _bin(venv, name):
     return venv / ("Scripts" if os.name == "nt" else "bin") / (name + ".exe" if os.name == "nt" else name)
 
 
+def _dependencies(root, src, venv, env):
+    with safe_path(root, src / "pyproject.toml").open("rb") as file:
+        project = tomllib.load(file)["project"]
+    extra = "all" if "all" in project.get("optional-dependencies", {}) else None
+    requirement = str(src) + (f"[{extra}]" if extra else "")
+    lock = safe_path(root, src / "pm/lock.json")
+    python_version = "3.13"
+    if lock.is_file():
+        pin = json.loads(lock.read_text(encoding="utf-8")).get("packages", {}).get("python", {}).get("version")
+        if isinstance(pin, str) and re.fullmatch(r"3\.\d+(?:\.\d+)?(?:\+\d+)?", pin):
+            python_version = pin.split("+", 1)[0]
+
+    python = _bin(venv, "python")
+    if uv := shutil.which("uv"):
+        env.update({
+            "UV_CACHE_DIR": str(_canary_dir(root, Path("uv-cache"))), "UV_LINK_MODE": "clone",
+            "UV_PYTHON_INSTALL_DIR": str(_canary_dir(root, Path("uv-python"))),
+            "UV_PROJECT_ENVIRONMENT": str(venv),
+        })
+        if safe_path(root, src / "uv.lock").is_file():
+            args = [uv, "sync", "--frozen", "--no-default-groups", "--python", python_version]
+            if extra:
+                args.extend(["--extra", extra])
+            _run(args, src, env, timeout=1200)
+            return "uv_sync_editable"
+        _run([uv, "venv", "--python", python_version, str(venv)], src, env, timeout=600)
+        _run([uv, "pip", "install", "--python", str(python), "-e", requirement], src, env, timeout=1200)
+        return "uv_pip_editable"
+
+    minor = python_version.split(".")[:2]
+    interpreter = shutil.which("python" + ".".join(minor))
+    if not interpreter and [str(part) for part in sys.version_info[:2]] == minor:
+        interpreter = sys.executable
+    if not interpreter:
+        raise OllamaError("hermes_setup_failed", f"Hermes requires uv or Python {'.'.join(minor)}")
+    _run([interpreter, "-m", "venv", str(venv)], src, env, timeout=600)
+    _run([str(python), "-m", "pip", "install", "-e", requirement], src, env, timeout=1200)
+    return "pip_editable"
+
+
 def _install(root, tag, guard):
     prefix = _canary_dir(root, Path("harnesses/hermes") / tag)
     install_home = _canary_dir(root, prefix.relative_to(root) / "install-home")
@@ -130,12 +171,17 @@ def _install(root, tag, guard):
     src = _state_path(root, prefix.relative_to(root) / "src")
     venv = _state_path(root, prefix.relative_to(root) / "venv")
     marker = _state_path(root, prefix.relative_to(root) / ".complete")
+    partial = _state_path(root, prefix.relative_to(root) / ".complete.part")
     executable = safe_path(root, _bin(venv, "hermes"))
     python = _bin(venv, "python")
     if marker.is_file() and executable.is_file():
-        return executable, json.loads(marker.read_text(encoding="utf-8"))
+        metadata = json.loads(marker.read_text(encoding="utf-8"))
+        if metadata.get("install_method"):
+            return executable, metadata
 
     guard("clone Hermes source")
+    marker.unlink(missing_ok=True)
+    partial.unlink(missing_ok=True)
     for path in (src, venv):
         if path.exists():
             shutil.rmtree(safe_path(root, path))
@@ -143,27 +189,17 @@ def _install(root, tag, guard):
          prefix, env, timeout=600)
     commit = _run(["git", "rev-parse", "HEAD"], src, env, timeout=30)
     guard("install Hermes dependencies")
-    uv = shutil.which("uv")
-    if uv:
-        cache = _canary_dir(root, Path("uv-cache"))
-        env.update({
-            "UV_CACHE_DIR": str(cache), "UV_LINK_MODE": "clone",
-            "UV_PYTHON_INSTALL_DIR": str(_canary_dir(root, Path("uv-python"))),
-        })
-        _run([uv, "venv", "--python", "3.13", str(venv)], prefix, env, timeout=600)
-        _run([uv, "pip", "install", "--python", str(python), str(src)], prefix, env, timeout=1200)
-    else:
-        interpreter = shutil.which("python3") or sys.executable
-        _run([interpreter, "-m", "venv", str(venv)], prefix, env, timeout=600)
-        _run([str(python), "-m", "pip", "install", str(src)], prefix, env, timeout=1200)
+    method = _dependencies(root, src, venv, env)
     guard("finish installing Hermes")
     if not executable.is_file():
         raise OllamaError("hermes_setup_failed", f"installed package has no Hermes entry point: {executable}")
-    metadata = {"tag": tag, "commit": commit,
+    metadata = {"tag": tag, "commit": commit, "install_method": method,
                 "python_version": _run([str(python), "--version"], prefix, env, timeout=30)}
-    partial = _state_path(root, prefix.relative_to(root) / ".complete.part")
-    partial.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
-    safe_path(root, partial).replace(safe_path(root, marker))
+    try:
+        partial.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
+        safe_path(root, partial).replace(safe_path(root, marker))
+    finally:
+        safe_path(root, partial).unlink(missing_ok=True)
     return executable, metadata
 
 

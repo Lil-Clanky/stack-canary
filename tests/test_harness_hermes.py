@@ -64,6 +64,79 @@ def test_environment_uses_isolated_paths(home, monkeypatch):
     assert Path(env["HERMES_WRITE_SAFE_ROOT"]) == work
 
 
+@pytest.mark.parametrize("has_lock", [True, False])
+def test_install_uses_editable_checkout(home, monkeypatch, has_lock):
+    tag = "v0.23.2"
+    prefix = home / "harnesses/hermes" / tag
+    src, venv = prefix / "src", prefix / "venv"
+    for directory in (src, venv):
+        directory.mkdir(parents=True)
+        (directory / "partial").touch()
+    (prefix / ".complete.part").touch()
+    commands = []
+
+    def run(argv, cwd, env, *, timeout):
+        if argv[:2] == ["git", "clone"]:
+            assert not src.exists() and not venv.exists() and not (prefix / ".complete.part").exists()
+            src.mkdir()
+            (src / "pyproject.toml").write_text("[project.optional-dependencies]\nall = []\n")
+            (src / "pm").mkdir()
+            (src / "pm/lock.json").write_text('{"packages":{"python":{"version":"3.14.9+20261021"}}}')
+            if has_lock:
+                (src / "uv.lock").touch()
+        elif argv[:2] == ["git", "rev-parse"]:
+            return "ae2a81c"
+        elif argv[0] == "uv":
+            assert cwd == src
+            assert env["UV_PROJECT_ENVIRONMENT"] == str(venv)
+            assert Path(env["UV_CACHE_DIR"]).is_relative_to(home)
+            assert Path(env["UV_PYTHON_INSTALL_DIR"]).is_relative_to(home)
+            assert Path(env["HOME"]).is_relative_to(home)
+            commands.append(argv[1:])
+            if argv[1] == "pip" and "-e" not in argv:
+                raise RuntimeError("Building wheels or sdists for hermes-agent is not supported")
+            executable = harness_hermes._bin(venv, "hermes")
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.touch()
+        elif argv[1] == "--version":
+            return "Python 3.14.9"
+        else:
+            pytest.fail(f"unexpected command: {argv}")
+
+    monkeypatch.setattr(harness_hermes, "_run", run)
+    monkeypatch.setattr(harness_hermes.shutil, "which", lambda _: "uv")
+    _, metadata = harness_hermes._install(home, tag, lambda _: None)
+    if has_lock:
+        assert commands == [["sync", "--frozen", "--no-default-groups", "--python", "3.14.9", "--extra", "all"]]
+        assert metadata["install_method"] == "uv_sync_editable"
+    else:
+        assert commands[-1][-2:] == ["-e", f"{src}[all]"]
+        assert metadata["install_method"] == "uv_pip_editable"
+    assert json.loads((prefix / ".complete").read_text()) == metadata
+
+
+def test_failed_install_leaves_no_completion_marker(home, monkeypatch):
+    prefix = home / "harnesses/hermes/v0.23.2"
+    prefix.mkdir(parents=True)
+    (prefix / ".complete").touch()
+    (prefix / ".complete.part").touch()
+
+    def run(argv, cwd, env, *, timeout):
+        if argv[0] == "git":
+            return "ae2a81c"
+        pytest.fail(f"unexpected command: {argv}")
+
+    def fail(*args):
+        raise OSError("fixture dependency failure")
+
+    monkeypatch.setattr(harness_hermes, "_run", run)
+    monkeypatch.setattr(harness_hermes, "_dependencies", fail)
+    with pytest.raises(OSError, match="fixture dependency failure"):
+        harness_hermes._install(home, "v0.23.2", lambda _: None)
+    assert not (prefix / ".complete").exists()
+    assert not (prefix / ".complete.part").exists()
+
+
 @pytest.mark.parametrize(("mode", "reason"), [
     ("ok", None), ("wrong_content", "file_mismatch"), ("no_file", "file_missing"),
     ("no_write_event", "no_write_event"), ("nonzero_exit", "harness_exit_nonzero"),
