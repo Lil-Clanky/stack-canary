@@ -320,8 +320,9 @@ def test_audited_macos_commit_uses_foreground(home, settings, monkeypatch):
         return "--oneshot --provider --base-url -m -t --query-file"
 
     monkeypatch.setattr(harness_hermes, "_run", help_probe)
-    harness = HermesHarness(home, hermes_foreground.TAG, settings, lambda _: None,
-                            installer=lambda *args: (launcher, {"commit": hermes_foreground.COMMIT}))
+    from stack_canary.hermes_registry import SEED_COMMIT, SEED_TAG
+    harness = HermesHarness(home, SEED_TAG, settings, lambda _: None,
+                            installer=lambda *args: (launcher, {"commit": SEED_COMMIT}))
     assert harness.metadata["gateway_mode"] == "foreground"
     assert calls == [[str(launcher), "chat", "--help"]]
     env = harness._env(home / "work", profile=Path("attempt/h"))

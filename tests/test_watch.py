@@ -46,6 +46,7 @@ def _summary():
 def offline(monkeypatch, home):
     Path("canary.toml").write_text('models = ["x"]\n', encoding="utf-8")
     monkeypatch.setattr(watch.isolation, "snapshot", lambda: {})
+    monkeypatch.setattr(watch.hermes_verify, "available", lambda: False)
     monkeypatch.setattr(watch, "_swap_used_bytes", lambda: None)
     tags = [{"tag_name": TAG}]
     calls = []

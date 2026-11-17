@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import isolation, maintenance, managed, report, results
+from . import hermes_registry, hermes_verify, isolation, maintenance, managed, report, results
 from .harness_hermes import hermes_tags
 from .releases import ollama_releases, version_key
 from .runtime_ollama import OllamaError, OllamaRuntime, _state_path, _swap_used_bytes, canary_home, safe_path
@@ -103,6 +103,7 @@ def _markdown(summary):
         f"- Selected: {', '.join(summary['selected']) or 'none'}",
         f"- Ran: {', '.join(summary['ran']) or 'none'}",
         f"- Unverified Hermes: {', '.join(summary['unverified_hermes']) or 'none'}",
+        f"- Failed Hermes verification: {', '.join(summary.get('failed_hermes', [])) or 'none'}",
         f"- Lowest free disk (bytes): {summary['lowest_free_bytes']}",
         f"- Peak swap (bytes): {summary['peak_swap_used_bytes']}",
         f"- Duration (seconds): {summary['duration_s']:.2f}", "",
@@ -135,7 +136,8 @@ def _notify(settings, summary, path, code):
     if not settings.notify_command:
         return
     if (summary["regressions"] or summary["infra_errors"] or summary["isolation_errors"]
-            or summary["new_unverified_hermes"] or (code == 0 and settings.notify_on_success)):
+            or summary["new_unverified_hermes"] or summary.get("failed_hermes")
+            or (code == 0 and settings.notify_on_success)):
         try:
             subprocess.run([*settings.notify_command, str(path)], check=True, timeout=HOOK_TIMEOUT_S,
                            stdin=subprocess.DEVNULL)
@@ -151,7 +153,7 @@ def _watch(runtime, dry_run):
     seen_path = _state_path(root, Path("watch-hermes.json"))
     summary = {"timestamp": results.run_id(), "models": settings.models, "hermes_tag": settings.hermes_tag,
                "selected": [], "ran": [], "regressions": [], "infra_errors": [], "isolation_errors": [],
-               "unverified_hermes": [], "new_unverified_hermes": []}
+               "unverified_hermes": [], "new_unverified_hermes": [], "failed_hermes": []}
     produced = []
     history = []
     code = 0
@@ -162,12 +164,23 @@ def _watch(runtime, dry_run):
         history = report.load_runs(directories)
         tested = {item.version for item in history if _complete(item.data, settings)}
         options = {"fetch": managed.fetch_url, "cache_root": root, "read_only": dry_run}
-        releases = ollama_releases(f"last:{settings.watch_versions}", asset_name=settings.asset_name, **options)
-        releases = [release for release in releases if release.version not in tested]
+        recent = ollama_releases(f"last:{settings.watch_versions}", asset_name=settings.asset_name, **options)
+        releases = [release for release in recent if release.version not in tested]
         summary["selected"] = [release.version for release in releases]
         tags = hermes_tags("last:50", **options)
-        summary["unverified_hermes"] = [tag for tag in tags
-                                        if version_key(tag[1:]) > version_key(settings.hermes_tag[1:])]
+        registry = hermes_registry.load(root)
+        newer = [tag for tag in tags if version_key(tag[1:]) > version_key(settings.hermes_tag[1:])]
+        if newer and hermes_verify.available() and newer[0] not in registry and not dry_run:
+            tag = newer[0]
+            row = hermes_verify.verify(runtime, tag)
+            registry[tag] = row
+            if row["status"] != "verified":
+                summary["failed_hermes"].append(tag)
+                if row["evidence"].get("isolation_incident"):
+                    summary["isolation_errors"].append({"tag": tag, "diff": {"hermes_probe": True}})
+                code = 2
+        summary["unverified_hermes"] = [tag for tag in newer
+                                        if registry.get(tag, {}).get("status") != "verified"]
         try:
             saved = json.loads(seen_path.read_bytes())
         except FileNotFoundError:
@@ -176,7 +189,20 @@ def _watch(runtime, dry_run):
             raise ValueError("invalid watch Hermes history")
         seen = set(saved)
         summary["new_unverified_hermes"] = [tag for tag in summary["unverified_hermes"] if tag not in seen]
-        changed = bool(releases or summary["new_unverified_hermes"])
+        pending = []
+        if hermes_verify.available():
+            known, _, _ = report.merge(history)
+            for tag in newer:
+                if registry.get(tag, {}).get("status") != "verified":
+                    continue
+                missing = [release for release in recent if any(
+                    (release.version, model, "B6", tag) not in known
+                    or known[(release.version, model, "B6", tag)].outcome == "error"
+                    for model in settings.models)]
+                if missing:
+                    pending.append((tag, missing))
+                    print(f"Watch Hermes {tag}: " + ", ".join(release.version for release in missing))
+        changed = bool(releases or pending or summary["new_unverified_hermes"])
         print("Watch Ollama: " + (", ".join(summary["selected"]) or "nothing new"))
         if summary["new_unverified_hermes"]:
             print("New unverified Hermes: " + ", ".join(summary["new_unverified_hermes"]))
@@ -184,10 +210,10 @@ def _watch(runtime, dry_run):
             return 0
         if releases:
             try:
-                code = managed._run_with_isolation(
+                code = max(code, managed._run_with_isolation(
                     runtime, settings.models, report.CHECK_IDS, directory, before,
                     lambda: (releases, [settings.hermes_tag]), produced,
-                )
+                ))
             finally:
                 _record_reports(summary, produced, history, settings.hermes_tag)
             if code == 0 and any(cell["outcome"] != "pass" for data in produced for model in data["models"]
@@ -195,6 +221,16 @@ def _watch(runtime, dry_run):
                 code = 1
             if code == 2 and not (summary["infra_errors"] or summary["isolation_errors"]):
                 summary["infra_errors"].append({"message": "Managed run failed to persist results"})
+        for tag, missing in pending:
+            additional = []
+            try:
+                code = max(code, managed._run_with_isolation(
+                    runtime, settings.models, ("B6",), directory, isolation.snapshot(),
+                    lambda: (missing, [tag]), additional,
+                ))
+            finally:
+                _record_reports(summary, additional, history, tag)
+                produced.extend(additional)
     except managed.INFRA_ERRORS as error:
         if dry_run:
             raise

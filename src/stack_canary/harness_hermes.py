@@ -395,18 +395,22 @@ def _cleanup(process, env, venv, preexisting):
 
 
 class HermesHarness:
-    def __init__(self, root, tag, settings, guard, *, installer=_install, argv_factory=None):
+    def __init__(self, root, tag, settings, guard, *, installer=_install, argv_factory=None, probe=None):
+        from .hermes_registry import verified_commit
+
         self.root = root
         self.tag = tag
         self.settings = settings
+        self.probe = probe
         _tag_version(tag)
         macos = sys.platform == "darwin" and argv_factory is None
-        self.disabled = macos and tag != hermes_foreground.TAG
+        expected = verified_commit(root, tag) if macos and probe is None else None
+        self.disabled = macos and probe is None and expected is None
         if self.disabled:
             self._disable({"tag": tag})
             return
         self.executable, self.metadata = installer(root, tag, guard)
-        if macos and self.metadata.get("commit") != hermes_foreground.COMMIT:
+        if macos and probe is None and self.metadata.get("commit") != expected:
             self._disable(self.metadata)
             return
         self.foreground = macos
@@ -417,7 +421,7 @@ class HermesHarness:
         self.argv = argv_factory(executable) if argv_factory else [str(executable)]
         work = _canary_dir(root, Path("attempts") / f"hermes-{tag}")
         self.bindir = executable.parent
-        help_text = _run([*self.argv, "chat", "--help"], work, self._env(work), timeout=30)
+        help_text = _run(self._protected([*self.argv, "chat", "--help"]), work, self._env(work), timeout=30)
         source = self.venv.parent / "src/hermes_cli/gateway_chat.py"
         self.flags = detected_flags(help_text, _gateway_options(root, source))
         self.supported = REQUIRED <= self.flags and bool({"--query-file", "-q"} & self.flags)
@@ -432,9 +436,24 @@ class HermesHarness:
     def _env(self, work, *, profile=None):
         env = hermes_env(self.root, self.tag, work, profile=profile)
         env["PATH"] = os.pathsep.join((str(self.bindir), env["PATH"]))
+        if self.probe is not None:
+            env["PATH"] = os.pathsep.join((str(self.probe.parent), env["PATH"]))
+            env["STACK_CANARY_LAUNCHCTL_LOG"] = str(self.probe)
         if profile is not None:
             env["HERMES_GATEWAY_LOCK_DIR"] = str(Path(env["HERMES_HOME"]) / "locks")
         return env
+
+    def _protected(self, argv):
+        if self.probe is None:
+            return argv
+        # PATH catches cooperative calls; Seatbelt also blocks the absolute system executable.
+        profile = ('(version 1) (allow default) '
+                   '(deny process-exec (literal "/bin/launchctl") (literal "/usr/bin/launchctl")) '
+                   '(deny file-write* (subpath {hermes}) (subpath {ollama}) (subpath {agents}))')
+        home = Path.home()
+        return ["/usr/bin/sandbox-exec", "-p", profile.format(
+            hermes=json.dumps(str(home / ".hermes")), ollama=json.dumps(str(home / ".ollama")),
+            agents=json.dumps(str(home / "Library/LaunchAgents"))), *argv]
 
     def check(self, endpoint, model):
         if self.disabled:
@@ -503,7 +522,7 @@ class HermesHarness:
             stdout = safe_path(self.root, attempt_dir / "stdout.log")
             stderr = safe_path(self.root, attempt_dir / "stderr.log")
             with stdout.open("wb") as out, stderr.open("wb") as err:
-                process = subprocess.Popen(argv, cwd=work, env=env, stdin=subprocess.DEVNULL,
+                process = subprocess.Popen(self._protected(argv), cwd=work, env=env, stdin=subprocess.DEVNULL,
                                            stdout=out, stderr=err, **_process_group())
                 try:
                     process.wait(timeout=self.settings.hermes_deadline_s)

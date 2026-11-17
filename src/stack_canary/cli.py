@@ -5,7 +5,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, config, maintenance, managed, report, results, schedule, watch
+from . import __version__, config, hermes_verify, maintenance, managed, report, results, schedule, watch
 from .checks import CHECKS
 from .checks.api import run_checks
 from .runtime_ollama import OllamaRuntime, canary_home
@@ -160,6 +160,10 @@ def main(argv: list[str] | None = None) -> int:
     install.add_argument("--print", dest="print_only", action="store_true")
     actions.add_parser("uninstall", help="remove the Stack Canary LaunchAgent")
     actions.add_parser("status", help="show the schedule and last watch result")
+    hermes = commands.add_parser("hermes", help="manage verified Hermes tags")
+    verification = hermes.add_subparsers(dest="action", required=True).add_parser(
+        "verify", help="verify foreground B6 and isolation for a tag")
+    verification.add_argument("tag")
     args = parser.parse_args(argv)
     if args.command == "run":
         return _run(args)
@@ -176,6 +180,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "schedule":
             return schedule.run(args)
+        if args.command == "hermes":
+            runtime = OllamaRuntime(canary_home(), config.load(), fetch=managed.fetch_url)
+            with runtime.exclusive():
+                row = hermes_verify.verify(runtime, args.tag)
+                return 0 if row["status"] == "verified" else 2
         output, drafts = report.generate(args.results, args.out, args.repro_dir, all_models=args.all_models)
     except managed.INFRA_ERRORS as error:
         print(f"canary: {error}", file=sys.stderr)

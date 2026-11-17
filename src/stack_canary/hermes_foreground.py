@@ -1,4 +1,4 @@
-"""Attach Hermes v0.23.2 chat to a foreground gateway owned by this attempt."""
+"""Attach verified Hermes chat to a foreground gateway owned by this attempt."""
 
 import json
 import os
@@ -8,8 +8,6 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
-TAG = "v0.23.2"
-COMMIT = "ae2a81ccc00e9b7c06301523e5bb09608397149c"
 # --force skips service-manager conflict probes. The host lock has its own isolated namespace.
 GATEWAY_ARGS = ("gateway", "run", "--force")
 

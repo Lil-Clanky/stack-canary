@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stack-canary"
-version = "0.2.0"
+version = "0.3.0.dev0"
 description = "Protocol compatibility checks for local LLM stacks"
 readme = "README.md"
 requires-python = ">=3.11"
