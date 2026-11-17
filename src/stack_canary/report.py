@@ -319,7 +319,7 @@ def _model_details(model):
               f"Source {model.get('source') or '—'}")
 
 
-def _header(run, harnesses):
+def _header(run, harnesses, *, stable_timestamp=False):
     data = run.data
     host = data.get("host") or {}
     ram = host.get("ram_bytes")
@@ -332,7 +332,7 @@ def _header(run, harnesses):
         "RAM": ram,
         "Canary": data.get("canary_version") or __version__,
         "Hermes": tags,
-        "Generated": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "Generated": (run.timestamp if stable_timestamp else datetime.now(UTC)).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "Latest run isolation": (data.get("isolation") or {}).get("status") or "Unrecorded",
     }
     return '<dl class="meta">' + "".join(f"<div><dt>{label}</dt><dd>{_e(value)}</dd></div>"
@@ -363,7 +363,42 @@ def _matrix(versions, names, columns, cells, models, drafts, output):
     return f'<div class="scroll"><table><thead>{title}<tr>{labels}</tr></thead>{"".join(rows)}</table></div>'
 
 
-def generate(directories=None, output=Path("report/index.html"), repro_dir=Path("repro"), *, all_models=False):
+EMOJI = {"pass": "✅", "fail": "❌", "flaky": "🟡", "timeout": "⏱️", "error": "⚠️", "n/a": "➖"}
+
+
+def _markdown(run, versions, names, columns, cells, drafts, output):
+    def row(parts):
+        return "| " + " | ".join(str(part).replace("|", "\\|").replace("\n", " ") for part in parts) + " |"
+
+    tags = ", ".join(tag for check, tag in columns if check == "B6" and tag) or "none recorded"
+    isolation = (run.data.get("isolation") or {}).get("status", "unrecorded")
+    lines = ["# Stack Canary compatibility matrix", "",
+             f"- Date: {run.timestamp.astimezone(UTC).date().isoformat()} (UTC)",
+             f"- Hermes: {tags}", f"- Isolation: {isolation}", ""]
+    headings = ["Ollama", *(f"{name} {check} {tag}".strip() for name in names for check, tag in columns)]
+    lines += [row(headings), row(["---"] * len(headings))]
+    for index, version in enumerate(versions):
+        older = versions[index + 1] if index + 1 < len(versions) else None
+        values = [version]
+        for name in names:
+            for check, tag in columns:
+                cell = cells.get((version, name, check, tag))
+                prior = cells.get((older, name, check, tag))
+                marker = EMOJI[cell.outcome] if cell else "—"
+                if cell and prior and prior.outcome == "pass" and cell.outcome != "pass" and _runtime_cell(cell):
+                    marker += " 🔻"
+                values.append(marker)
+        lines.append(row(values))
+    lines += ["", "## Reproduction drafts", ""]
+    lines.extend(f"- [{path.name}]({quote(Path(os.path.relpath(path, output.parent)).as_posix())})"
+                 for path in sorted(drafts.values()))
+    if not drafts:
+        lines.append("- None")
+    return "\n".join(lines) + "\n"
+
+
+def generate(directories=None, output=Path("report/index.html"), repro_dir=Path("repro"), *,
+             all_models=False, stable_timestamp=False):
     root = canary_home()
     cwd = Path.cwd().resolve()
     output, report_scope = _scope(output, root, cwd / "report")
@@ -393,6 +428,9 @@ def generate(directories=None, output=Path("report/index.html"), repro_dir=Path(
     page = ('<!doctype html>\n<html lang="en"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<title>Stack Canary compatibility report</title><style>{STYLE}</style>'
-            f'<main><h1>Stack Canary compatibility report</h1>{_header(runs[-1], harnesses)}{matrix}{legend}</main></html>\n')
+            f'<main><h1>Stack Canary compatibility report</h1>{_header(runs[-1], harnesses, stable_timestamp=stable_timestamp)}{matrix}{legend}</main></html>\n')
     _write(output, report_scope, page)
+    if output.name == "index.html":
+        markdown = output.with_name("MATRIX.md")
+        _write(markdown, report_scope, _markdown(runs[-1], versions, names, columns, cells, drafts, markdown))
     return output, len(drafts)

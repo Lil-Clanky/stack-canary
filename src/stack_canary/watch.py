@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import hermes_registry, hermes_verify, isolation, maintenance, managed, notifications, report, results
+from . import hermes_registry, hermes_verify, isolation, maintenance, managed, notifications, publish, report, results
 from .harness_hermes import hermes_tags
 from .releases import ollama_releases, version_key
 from .runtime_ollama import OllamaError, OllamaRuntime, _state_path, _swap_used_bytes, canary_home, safe_path
@@ -239,7 +239,7 @@ def _watch(runtime, dry_run):
         code = 2
     if changed and (history or produced):
         try:
-            report.generate(directories)
+            report.generate(directories, repro_dir=root / "repro")
         except (OSError, ValueError) as error:
             summary["infra_errors"].append({"message": f"Report: {error}"})
             code = 2
@@ -260,6 +260,14 @@ def _watch(runtime, dry_run):
             _write_summary(root, summary)
     if summary["new_unverified_hermes"]:
         report._write(seen_path, root, json.dumps(sorted(seen | set(summary["new_unverified_hermes"]))) + "\n")
+    if settings.publish_branch:
+        try:
+            publish.publish(runtime)
+        except managed.INFRA_ERRORS as error:
+            summary["infra_errors"].append({"message": f"Publish: {error}"})
+            code = 2
+            summary.update(exit_code=2, status="error")
+            path = _write_summary(root, summary)
     _notify(settings, summary, path, code)
     return code
 

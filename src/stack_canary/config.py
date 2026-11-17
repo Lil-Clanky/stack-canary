@@ -30,6 +30,8 @@ class Settings:
     notify: tuple[str, ...] = ()
     ntfy_server: str = "https://ntfy.sh"
     ntfy_topic: str | None = None
+    publish_branch: str | None = None
+    publish_gh_user: str | None = None
     keep_runtimes: int = 3
     keep_hermes: int = 2
 
@@ -89,4 +91,13 @@ def load(path: Path = Path("canary.toml")) -> Settings:
         raise ValueError("notify_on_success must be a boolean")
     from .notifications import validate
     validate(settings)
+    if settings.publish_branch not in (None, "matrix"):
+        raise ValueError("publish_branch must be matrix")
+    if settings.publish_gh_user is not None and (
+        not isinstance(settings.publish_gh_user, str) or not settings.publish_gh_user.isascii()
+        or not settings.publish_gh_user.replace("-", "").isalnum()
+    ):
+        raise ValueError("publish_gh_user must be a GitHub username")
+    if settings.publish_branch and not settings.publish_gh_user:
+        raise ValueError("publish_branch requires publish_gh_user")
     return settings

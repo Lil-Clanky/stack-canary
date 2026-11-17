@@ -5,7 +5,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, config, hermes_verify, maintenance, managed, notifications, report, results, schedule, watch
+from . import __version__, config, hermes_verify, maintenance, managed, notifications, publish, report, results, schedule, watch
 from .checks import CHECKS
 from .checks.api import run_checks
 from .runtime_ollama import OllamaRuntime, canary_home
@@ -166,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     verification.add_argument("tag")
     notify = commands.add_parser("notify", help="test configured notification channels")
     notify.add_argument("--test", action="store_true", required=True)
+    commands.add_parser("publish", help="publish sanitized artifacts to the matrix branch")
     args = parser.parse_args(argv)
     if args.command == "run":
         return _run(args)
@@ -182,6 +183,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "schedule":
             return schedule.run(args)
+        if args.command == "publish":
+            runtime = OllamaRuntime(canary_home(), config.load())
+            with runtime.exclusive():
+                publish.publish(runtime)
+            return 0
         if args.command == "notify":
             sent = notifications.send(config.load(), {"status": "test notification"})
             for channel, status in sent.items():
