@@ -8,7 +8,7 @@ import tarfile
 from dataclasses import asdict
 from pathlib import Path
 
-from . import __version__, results
+from . import __version__, isolation, results
 from .checks.api import run_checks
 from .harness_hermes import HermesHarness, hermes_tags
 from .releases import fetch_url, ollama_releases, version_key
@@ -139,7 +139,7 @@ def _check_version(runtime, release, checks, models, report, harnesses):
         report["log"] = _diagnostics(server)
 
 
-def _run(runtime, releases, names, checks, output, tags):
+def _run(runtime, releases, names, checks, tags, reports):
     failures = {}
     installed = []
     for release in releases:
@@ -165,7 +165,6 @@ def _run(runtime, releases, names, checks, output, tags):
             if server is not None:
                 master_logs[release.version] = _diagnostics(server)
 
-    identifier = results.run_id()
     harnesses = []
     harness_errors = []
     if master:
@@ -226,13 +225,33 @@ def _run(runtime, releases, names, checks, output, tags):
         elif any(check["outcome"] not in {"pass", "n/a"} for model in models for check in model["checks"]):
             exit_code = max(exit_code, 1)
 
-        try:
-            path = results.write(output, report, root=runtime.root, identifier=identifier, version=version)
-            print(f"Ollama {version}: results written to {path}")
-        except (OSError, ValueError) as error:
-            print(f"Ollama {version}: could not write results: {error}", file=sys.stderr)
-            exit_code = 2
+        reports.append(report)
     return exit_code
+
+
+def _run_with_isolation(runtime, releases, names, checks, output, tags):
+    before = isolation.snapshot()
+    identifier = results.run_id()
+    reports = []
+    try:
+        exit_code = _run(runtime, releases, names, checks, tags, reports)
+    finally:
+        audit = isolation.compare(before, isolation.snapshot())
+        if audit["status"] == "isolation_violated":
+            print(f"canary: isolation_violated ({', '.join(sorted(audit['diff']))})", file=sys.stderr)
+        if audit["warnings"]:
+            print(f"canary: isolation warning ({', '.join(sorted(audit['warnings']))})", file=sys.stderr)
+        write_failed = False
+        for report in reports:
+            version = report["runtime"]["version"]
+            report["isolation"] = audit
+            try:
+                path = results.write(output, report, root=runtime.root, identifier=identifier, version=version)
+                print(f"Ollama {version}: results written to {path}")
+            except (OSError, ValueError) as error:
+                print(f"Ollama {version}: could not write results: {error}", file=sys.stderr)
+                write_failed = True
+    return 2 if audit["status"] == "isolation_violated" or write_failed else exit_code
 
 
 def run(spec, names, checks, settings, *, hermes=None, dry_run=False):
@@ -252,7 +271,7 @@ def run(spec, names, checks, settings, *, hermes=None, dry_run=False):
                 print(f"Hermes releases for B6: {', '.join(tags)}")
             return 0
         with runtime.exclusive():
-            return _run(runtime, releases, names, checks, output, tags)
+            return _run_with_isolation(runtime, releases, names, checks, output, tags)
     except INFRA_ERRORS as error:
         print(f"canary: {error}", file=sys.stderr)
         return 2

@@ -478,6 +478,7 @@ def managed_fixture(monkeypatch, settings, *, versions=("1.10.0",), argv_factory
         encoding="utf-8",
     )
     monkeypatch.setattr(managed, "fetch_url", fetch)
+    monkeypatch.setattr(managed.isolation, "snapshot", lambda: {})
     monkeypatch.setattr(managed, "OllamaRuntime",
                         partial(OllamaRuntime, argv_factory=argv_factory, ready_s=4, stop_s=0.5))
     return calls
