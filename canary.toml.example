@@ -7,7 +7,7 @@ thinking_models = []
 hermes_deadline_s = 300
 
 # Managed Ollama settings.
-# v0.1 CLI model set: --models llama3.2:3b,granite4:3b-h
+# v0.1 CLI model set: --models llama3.2:3b,granite4:3b-h,qwen3.5:4b
 asset_name = "ollama-darwin.tgz"
 port = 11535
 context_length = 65536

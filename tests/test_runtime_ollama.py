@@ -1,11 +1,16 @@
+import errno
 import hashlib
 import io
 import json
 import os
+import select
 import shutil
+import signal
 import socket
+import subprocess
 import sys
 import tarfile
+from contextlib import closing
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -281,6 +286,99 @@ def test_context_stops_process_and_frees_port(home, settings):
         pass
 
 
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+@pytest.mark.parametrize("denied_signal", [0, signal.SIGTERM])
+def test_stop_tolerates_killpg_permission_error(home, settings, monkeypatch, denied_signal):
+    runtime, release = installed_runtime(home, settings)
+    server = runtime.server(release)
+    calls = []
+    server.process = SimpleNamespace(
+        pid=123, poll=lambda: calls.append("poll"), wait=lambda *, timeout: calls.append(("wait", timeout)),
+    )
+
+    def killpg(pid, signum):
+        assert pid == server.process.pid
+        calls.append(signum)
+        if signum == denied_signal:
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(runtime_ollama.os, "killpg", killpg)
+    server._stop()
+    expected = ["poll", signal.SIGTERM]
+    if denied_signal == 0:
+        expected.extend(["poll", 0])
+    assert calls == [*expected, ("wait", 5)]
+    assert len(server.stop_notes) == 1
+    assert "Operation not permitted" in server.stop_notes[0]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX exit notifications without reaping")
+def test_stop_reaps_an_already_exited_posix_child(home, settings):
+    runtime, release = installed_runtime(home, settings)
+    server = runtime.server(release)
+    with subprocess.Popen(
+        [sys.executable, "-B", "-c", "import sys; sys.stdin.buffer.read(1); sys.exit(7)"],
+        cwd=home, stdin=subprocess.PIPE, start_new_session=True,
+    ) as child:
+        # Wait for exit without collecting its status. Darwin supplies kqueue.
+        if hasattr(select, "kqueue"):
+            with closing(select.kqueue()) as queue:
+                event = select.kevent(child.pid, filter=select.KQ_FILTER_PROC, flags=select.KQ_EV_ADD,
+                                      fflags=select.KQ_NOTE_EXIT)
+                queue.control([event], 0)
+                child.stdin.close()
+                assert queue.control(None, 1, 5)
+        else:
+            child.stdin.close()
+            os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+        assert child.returncode is None
+        server.process = child
+        server._stop()
+        assert child.returncode == 7
+
+
+def test_stop_raises_when_port_remains_busy(home, settings, monkeypatch):
+    with FakeOllama() as listener:
+        runtime, release = installed_runtime(home, replace(settings, port=listener.server_port))
+        server = runtime.server(release)
+        server.process = SimpleNamespace(poll=lambda: 0, wait=lambda *, timeout: 0)
+        monkeypatch.setattr(server, "_signal_group", lambda _: False)
+        ticks = iter([0, 3] if os.name == "nt" else [0, 0, 3])
+        monkeypatch.setattr(runtime_ollama, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+        with pytest.raises(OllamaError, match=f"did not release port {listener.server_port}") as failure:
+            server._stop()
+    assert failure.value.code == "stop_failed"
+
+
+@pytest.mark.parametrize("original_failure", ["startup", "body", None])
+def test_context_preserves_original_failure_during_cleanup(home, settings, monkeypatch, original_failure):
+    runtime, release = installed_runtime(home, settings)
+    server = runtime.server(release)
+    original = OllamaError("api_error", "/v1/chat/completions: connection_error")
+    shutdown = OllamaError("stop_failed", "port stayed busy")
+
+    def start():
+        server.process = object()
+        if original_failure == "startup":
+            raise original
+
+    def stop():
+        raise shutdown
+
+    monkeypatch.setattr(server, "_start", start)
+    monkeypatch.setattr(server, "_stop", stop)
+    server.log_path.parent.mkdir(parents=True)
+    server.log_path.write_text("fixture log\n", encoding="utf-8")
+    with pytest.raises(OllamaError) as failure, server:
+        if original_failure == "body":
+            raise original
+    assert failure.value is (original if original_failure else shutdown)
+    assert server.log_tail == ["fixture log"]
+    assert server.stop_notes == ["Ollama shutdown failed: port stayed busy"]
+    if original_failure:
+        assert original.__notes__ == server.stop_notes
+
+
 def test_clone_fallback_replaces_without_sharing(home, settings):
     runtime = OllamaRuntime(home, settings)
     master = home / "stores/master"
@@ -505,12 +603,26 @@ def test_warmup_http_error_preserves_response_and_continues_same_version(home, s
     assert any(sample["step"] == "after warm-up warmup-error" for sample in report["disk_trace"])
 
 
-def test_dead_server_ends_version(home, settings, monkeypatch):
+@pytest.mark.parametrize("inject_stop_error", [False, True])
+def test_dead_server_ends_version(home, settings, monkeypatch, inject_stop_error):
     managed_fixture(monkeypatch, settings)
+    if inject_stop_error:
+        original_stop = runtime_ollama.OllamaServer._stop
+
+        def stop(server):
+            original_stop(server)
+            if server.process.returncode == 7:
+                raise PermissionError(errno.EPERM, "fixture stop failure")
+
+        monkeypatch.setattr(runtime_ollama.OllamaServer, "_stop", stop)
     args = ["run", "--ollama", "last:1", "--models", "server-dead,x", "--checks", "A1", "--repeats", "1"]
     assert main(args) == 2
     report = read_reports(home)["1.10.0"]
     assert report["infra_error"]["code"] == "server_unreachable"
+    assert report["models"][0]["model_error"]["message"] == "/v1/chat/completions: connection_error"
+    if inject_stop_error:
+        assert "fixture stop failure" in report["log"]["stop_note"]
+        assert "fixture stop failure" not in report["infra_error"]["message"]
     assert report["models"][0]["checks"] == [{"check_id": "A1", "outcome": "error", "attempts": []}]
     assert report["models"][1]["checks"] == []
     assert not any(sample["step"] == "before warm-up x" for sample in report["disk_trace"])

@@ -66,10 +66,10 @@ The optional `seed_store` setting is unset by default. On macOS, opt in with
 using APFS. The source is read-only. Once a runtime passes archive verification
 and installation, Canary removes the downloaded tarball.
 
-The v0.1 model set is `llama3.2:3b` (Llama-3 JSON template) and
-`granite4:3b-h` (Granite tool format). Both are already in the Mac mini's
-canary store. We dropped `tev1:4b` because the installed model reports only
-`decision` in `/api/show`.
+The v0.1 model set is `llama3.2:3b` (Llama-3 JSON template),
+`granite4:3b-h` (Granite tool format), and `qwen3.5:4b`. The first two are
+already in the Mac mini's canary store. The installed `tev1:4b` was dropped
+because it reports only `decision` in `/api/show`.
 
 Managed runs write one schema-version-2 JSON file per release under
 `$CANARY_HOME/results`. A relative `--results-dir` is relative to `CANARY_HOME`.
@@ -78,6 +78,7 @@ log matches, and check attempts. The check cells can be `pass`, `fail`,
 `timeout`, `flaky`, `n/a`, or `error`. Models that require a newer Ollama
 version are `n/a`. When the base model lacks the `tools` capability, all
 its checks are `n/a` with reason `model_lacks_tools` and it skips warm-up.
+The capability check also applies to `qwen3.5:4b`.
 Warm-up and GPU errors, including zero GPU offload, produce `error` cells
 and a `model_error` with HTTP status and up to 2 KiB of response body when
 available. The runner checks `/api/version` and moves to the next model
@@ -89,14 +90,19 @@ after samples in the result's `disk_trace`. Each sample includes free disk
 bytes and macOS swap usage in bytes. Swap is `null` elsewhere or when the
 reading is unavailable.
 
+The server's log diagnostics include `stop_note` when shutdown encounters
+a problem. If Ollama still holds the configured port after the shutdown
+grace period, the runner reports `stop_failed` or preserves the original
+failure with a shutdown note.
+
 ## Live smoke test (macOS)
 
 From the repository on the Mac mini, preview the plan, then run the newest
 stable release with the v0.1 model set.
 
 ```sh
-canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h --dry-run
-canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h
+canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h,qwen3.5:4b --dry-run
+canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h,qwen3.5:4b
 ```
 
 Check the versioned JSON file for the Ollama version, nonzero GPU offload,

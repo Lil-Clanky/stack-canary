@@ -15,7 +15,7 @@ import tarfile
 import tempfile
 import time
 from collections import deque
-from contextlib import contextmanager, nullcontext, suppress
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
@@ -267,6 +267,7 @@ class OllamaServer:
         self.log_path = _state_path(root, Path(f"logs/ollama-{release.version}-{timestamp}.log"))
         self.log_tail = []
         self.log_matches = []
+        self.stop_notes = []
 
     def __enter__(self):
         try:
@@ -314,6 +315,17 @@ class OllamaServer:
             time.sleep(min(0.1, max(0, deadline - time.monotonic())))
         raise OllamaError("readiness_timeout", f"Ollama did not become ready in {self.ready_s:g}s")
 
+    def _signal_group(self, signum):
+        try:
+            os.killpg(self.process.pid, signum)
+        except ProcessLookupError:
+            return False
+        except PermissionError as error:
+            name = signal.Signals(signum).name if signum else "0"
+            self.stop_notes.append(f"killpg({self.process.pid}, {name}): {error}")
+            return False
+        return True
+
     def _stop(self):
         process = self.process
         if os.name == "nt":
@@ -328,45 +340,65 @@ class OllamaServer:
                     process.kill()
                     process.wait(timeout=5)
         else:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGTERM)
+            process.poll()
             deadline = time.monotonic() + self.stop_s
-            while True:
-                process.poll()
-                try:
-                    os.killpg(process.pid, 0)
-                except ProcessLookupError:
-                    break
-                if time.monotonic() >= deadline:
-                    with suppress(ProcessLookupError):
-                        os.killpg(process.pid, signal.SIGKILL)
-                    break
-                time.sleep(0.05)
-            process.wait(timeout=5)
+            if self._signal_group(signal.SIGTERM):
+                while True:
+                    process.poll()
+                    if not self._signal_group(0):
+                        break
+                    if time.monotonic() >= deadline:
+                        self._signal_group(signal.SIGKILL)
+                        break
+                    time.sleep(0.05)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.stop_notes.append(f"Timed out waiting for Ollama process {process.pid} to exit")
 
         deadline = time.monotonic() + 2
         while True:
             try:
                 _port_free(self.settings.port)
                 return
-            except OllamaError:
+            except OllamaError as error:
                 if time.monotonic() >= deadline:
-                    raise
+                    raise OllamaError(
+                        "stop_failed", f"Ollama did not release port {self.settings.port}: {error}",
+                    ) from error
                 time.sleep(0.05)
 
+    def _collect_logs(self):
+        tail = deque(maxlen=30)
+        with self.log_path.open(encoding="utf-8", errors="replace") as log:
+            for line in log:
+                line = line.rstrip("\r\n")
+                tail.append(line)
+                if re.search(r"inference compute|offloaded|metal", line, re.IGNORECASE):
+                    self.log_matches.append(line)
+        self.log_tail = list(tail)
+
+    def _record_cleanup_failure(self, action, failure, primary):
+        note = f"Ollama {action} failed: {failure}"
+        self.stop_notes.append(note)
+        if primary is not None:
+            primary.add_note(note)
+            return primary
+        return failure
+
     def __exit__(self, error_type, error, traceback):
+        primary = error
         try:
             with self.disk_step(f"server stop {self.label}"):
                 self._stop()
-        finally:
-            tail = deque(maxlen=30)
-            with self.log_path.open(encoding="utf-8", errors="replace") as log:
-                for line in log:
-                    line = line.rstrip("\r\n")
-                    tail.append(line)
-                    if re.search(r"inference compute|offloaded|metal", line, re.IGNORECASE):
-                        self.log_matches.append(line)
-            self.log_tail = list(tail)
+        except BaseException as stop_error:
+            primary = self._record_cleanup_failure("shutdown", stop_error, primary)
+        try:
+            self._collect_logs()
+        except BaseException as log_error:
+            primary = self._record_cleanup_failure("log collection", log_error, primary)
+        if error_type is None and primary is not None:
+            raise primary
 
 
 def _swap_used_bytes():

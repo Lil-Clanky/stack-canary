@@ -35,6 +35,7 @@ def _diagnostics(server):
         "path": str(server.log_path),
         "tail": server.log_tail,
         "matches": server.log_matches,
+        "stop_note": "\n".join(server.stop_notes) or None,
     }
 
 
