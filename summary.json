@@ -1,0 +1,27 @@
+{
+  "timestamp": "20261117T193907.860542Z",
+  "models": [
+    "llama3.2:3b",
+    "granite4:3b-h",
+    "qwen3.5:4b"
+  ],
+  "hermes_tag": "v0.23.2",
+  "selected": [
+    "0.40.16",
+    "0.40.15"
+  ],
+  "ran": [
+    "0.40.16",
+    "0.40.15"
+  ],
+  "regressions": [],
+  "infra_errors": [],
+  "isolation_errors": [],
+  "unverified_hermes": [],
+  "new_unverified_hermes": [],
+  "lowest_free_bytes": 7759814656,
+  "peak_swap_used_bytes": 6967001088,
+  "duration_s": 1352.5726872500964,
+  "exit_code": 0,
+  "status": "pass"
+}
