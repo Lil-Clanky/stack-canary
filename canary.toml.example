@@ -16,3 +16,12 @@ min_free_gb = 5
 allow_full_copy = false
 # Unset by default. Optional read-only, clonefile-only seeding on macOS.
 # seed_store = "~/.ollama/models"
+
+# Release watcher and cleanup.
+models = ["llama3.2:3b", "granite4:3b-h", "qwen3.5:4b"]
+watch_versions = 2
+hermes_tag = "v0.23.2"
+keep_runtimes = 3
+keep_hermes = 2
+notify_on_success = false
+# notify_command = ["/absolute/path/to/notify"]

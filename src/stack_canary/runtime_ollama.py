@@ -1,7 +1,9 @@
 """Install Ollama and run its isolated server and model stores."""
 
 import ctypes
+import errno
 import hashlib
+import json
 import os
 import posixpath
 import re
@@ -73,6 +75,43 @@ def _state_path(root: Path, relative: Path) -> Path:
     if path != root / relative:
         raise ValueError(f"managed state cannot use a symlink or junction: {relative}")
     return path
+
+
+def _pid_alive(pid):
+    if os.name == "nt":
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER for an absent PID
+        try:
+            return kernel.WaitForSingleObject(handle, 0) != 0  # WAIT_OBJECT_0 means exited
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _acquire_run_guard(stream):
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 def _existing_parent(path: Path) -> Path:
@@ -458,15 +497,39 @@ class OllamaRuntime:
     @contextmanager
     def exclusive(self):
         lock = _state_path(self.root, Path(".run-lock"))
+        owner = _state_path(self.root, Path(".run-lock/owner.json"))
+        guard = _state_path(self.root, Path(".run-lock.guard"))
         self.root.mkdir(parents=True, exist_ok=True)
-        try:
+        with guard.open("a+b") as stream:
+            stream.seek(0)
+            try:
+                _acquire_run_guard(stream)
+            except OSError as error:
+                if error.errno not in {errno.EACCES, errno.EAGAIN}:
+                    raise
+                raise OllamaError("home_in_use", f"canary home is locked: {lock}") from error
+            if lock.exists():
+                try:
+                    record = json.loads(owner.read_bytes())
+                    pid = record.get("pid") if isinstance(record, dict) else None
+                except (FileNotFoundError, ValueError):
+                    pid = None
+                if type(pid) is int and 0 < pid <= 2 ** 31 - 1:
+                    if _pid_alive(pid):
+                        raise OllamaError("home_in_use", f"canary home is locked by PID {pid}: {lock}")
+                    print(f"canary: recovering stale run lock from PID {pid}")
+                else:
+                    print("canary: recovering incomplete run lock")
+                owner.unlink(missing_ok=True)
+                lock.rmdir()
             lock.mkdir()
-        except FileExistsError as error:
-            raise OllamaError("home_in_use", f"canary home is locked: {lock}") from error
-        try:
-            yield
-        finally:
-            safe_path(self.root, lock).rmdir()
+            try:
+                owner.write_text(json.dumps({"pid": os.getpid(), "started_at": datetime.now(UTC).isoformat()}),
+                                 encoding="utf-8")
+                yield
+            finally:
+                owner.unlink(missing_ok=True)
+                lock.rmdir()
 
     def guard(self, operation: str, needed: int = 0) -> None:
         reserve = int(self.settings.min_free_gb * 1024 ** 3)

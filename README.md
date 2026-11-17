@@ -212,4 +212,51 @@ unmarked files intact. Run
 `canary report` from the repository root to use the default output
 directories. Both output directories are Git-ignored.
 
+## Scheduling
+
+`canary watch` uses the managed run lock and checks the newest two stable
+Ollama releases by default. It runs A1–A5 and B6 for each release without a
+complete result for the configured models and pinned Hermes tag. Newer
+Hermes tags appear in the summary as unverified. Use `canary watch --dry-run`
+to preview the plan. Release discovery uses the existing 60-minute cache.
+
+After new work, the watcher regenerates the compatibility report and repro
+drafts, writes `report/summary.md` and `report/summary.json`, and prunes old
+installations. It also writes a summary when there is nothing new. The summary
+records regressions, infrastructure and isolation errors, and resource
+measurements from the run. Exit codes are 0 for no new checks or all passes,
+1 for a check that did not pass, and 2 for infrastructure or isolation errors.
+
+`canary gc --dry-run` previews cleanup. `canary gc` keeps the newest three
+Ollama runtimes and their clones, and the pinned Hermes tag plus the newest
+two Hermes installs by default. Results, the master model store, and shared
+uv data are retained. Space freed is the measured change in free disk space,
+which accounts for shared blocks in APFS clones.
+
+The optional `notify_command` is a list of arguments. Canary runs it with a
+15-second timeout, appending the Markdown summary path. It runs on a new
+regression, an infrastructure or isolation error, or a newly discovered
+unverified Hermes tag. Set `notify_on_success = true` to also notify on success.
+Configure the watcher in `canary.toml` using `canary.toml.example`.
+
+On macOS, run the following from the repository with Canary installed in
+`.venv`. The time is local.
+
+```sh
+canary schedule install --at 02:15 --print
+canary schedule install --at 02:15
+canary schedule status
+canary schedule uninstall
+```
+
+Use `--replace` to update an existing schedule. The job runs `.venv/bin/canary
+watch` from the repository, logs to `~/.stack-canary/logs/watch.log` by default,
+and uses the configured `CANARY_HOME` when set. Its writes are confined to the
+canary home and the repository's `report/` and `repro/`.
+
+Only explicit `schedule install` and `schedule uninstall` commands change
+launchd state. They manage the single `com.stackcanary.watch` label and
+`~/Library/LaunchAgents/com.stackcanary.watch.plist`. The isolation audit
+records this job and plist and excludes both from its violation diff.
+
 See [the project checklist](tasks/todo.md) for planned work.

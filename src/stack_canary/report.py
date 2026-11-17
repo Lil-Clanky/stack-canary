@@ -120,8 +120,8 @@ def load_runs(directories):
     return sorted(runs, key=lambda run: run.timestamp)
 
 
-def _harness_records(run):
-    info = run.data.get("harness") or {}
+def _harness_records(data):
+    info = data.get("harness") or {}
     entries = info.get("releases", [info]) if isinstance(info, dict) else info
     return {entry["tag"]: entry for entry in entries or []
             if isinstance(entry, dict) and isinstance(entry.get("tag"), str)}
@@ -154,7 +154,7 @@ def merge(runs):
     cells, models, harnesses = {}, {}, {}
     for run in runs:
         selected = (run.data.get("settings") or {}).get("checks") or CHECK_IDS
-        installed = _harness_records(run)
+        installed = _harness_records(run.data)
         harnesses.update(installed)
         issues = {issue.get("tag", ""): issue for issue in run.data.get("harness_errors") or []}
         requested_tags = installed.keys() | issues.keys() | set(run.data.get("hermes_tags") or [])

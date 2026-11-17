@@ -187,6 +187,8 @@ def _run(runtime, releases, names, checks, tags, reports):
              "context_length": None, "checks": [], "gpu": None}
             for name in names
         ]
+        recorded_settings = asdict(runtime.settings)
+        recorded_settings.pop("notify_command", None)
         report = {
             "schema_version": 2,
             "canary_version": __version__,
@@ -195,7 +197,7 @@ def _run(runtime, releases, names, checks, tags, reports):
                 "version": version, "tag": release.tag, "asset": release.asset_name,
                 "sha256": release.sha256, "path": str(runtime.root / "runtimes/ollama" / version),
             },
-            "settings": {**asdict(runtime.settings), "checks": checks},
+            "settings": {**recorded_settings, "checks": checks},
             "master_version": master_version,
             "server_env": {},
             "models": models,
@@ -238,11 +240,10 @@ def _releases(runtime, spec, checks, hermes, *, dry_run=False):
     return releases, tags
 
 
-def _run_with_isolation(runtime, spec, names, checks, output, hermes, before):
+def _run_with_isolation(runtime, names, checks, output, before, resolve, reports):
     identifier = results.run_id()
-    reports = []
     try:
-        releases, tags = _releases(runtime, spec, checks, hermes)
+        releases, tags = resolve()
         exit_code = _run(runtime, releases, names, checks, tags, reports)
     finally:
         audit = isolation.compare(before, isolation.snapshot())
@@ -263,14 +264,17 @@ def _run_with_isolation(runtime, spec, names, checks, output, hermes, before):
     return 2 if audit["status"] == "isolation_violated" or write_failed else exit_code
 
 
+def validate_models(names):
+    aliases = {model_key(name) for name in names}
+    derived = {model_key(derived_name(name)) for name in names}
+    if len(aliases) != len(names) or len(derived) != len(names) or aliases & derived:
+        raise ValueError("model names or derived canary names collide")
+
+
 def run(spec, names, checks, settings, *, hermes=None, dry_run=False):
     try:
         before = None if dry_run else isolation.snapshot()
-        aliases = {model_key(name) for name in names}
-        derived = {model_key(derived_name(name)) for name in names}
-        if len(aliases) != len(names) or len(derived) != len(names) or aliases & derived:
-            raise ValueError("model names or derived canary names collide")
-
+        validate_models(names)
         runtime = OllamaRuntime(canary_home(), settings, fetch=fetch_url)
         output = safe_path(runtime.root, Path(settings.results_dir))
         if dry_run:
@@ -280,7 +284,8 @@ def run(spec, names, checks, settings, *, hermes=None, dry_run=False):
                 print(f"Hermes releases for B6: {', '.join(tags)}")
             return 0
         with runtime.exclusive():
-            return _run_with_isolation(runtime, spec, names, checks, output, hermes, before)
+            return _run_with_isolation(runtime, names, checks, output, before,
+                                       lambda: _releases(runtime, spec, checks, hermes), [])
     except INFRA_ERRORS as error:
         print(f"canary: {error}", file=sys.stderr)
         return 2

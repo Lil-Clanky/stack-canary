@@ -4,7 +4,7 @@ import tomllib
 from dataclasses import dataclass, fields
 from pathlib import Path
 
-from .releases import DEFAULT_ASSET, asset_filename
+from .releases import DEFAULT_ASSET, asset_filename, version_key
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,13 @@ class Settings:
     allow_full_copy: bool = False
     seed_store: str | None = None
     hermes_deadline_s: float = 300
+    models: tuple[str, ...] = ("llama3.2:3b", "granite4:3b-h", "qwen3.5:4b")
+    watch_versions: int = 2
+    hermes_tag: str = "v0.23.2"
+    notify_command: tuple[str, ...] | None = None
+    notify_on_success: bool = False
+    keep_runtimes: int = 3
+    keep_hermes: int = 2
 
 
 def load(path: Path = Path("canary.toml")) -> Settings:
@@ -34,11 +41,13 @@ def load(path: Path = Path("canary.toml")) -> Settings:
     unknown = values.keys() - {item.name for item in fields(Settings)}
     if unknown:
         raise ValueError(f"unknown config settings: {', '.join(sorted(unknown))}")
-    if "thinking_models" in values:
-        models = values["thinking_models"]
-        if not isinstance(models, list) or not all(isinstance(model, str) and model for model in models):
-            raise ValueError("thinking_models must be an array of nonempty model names")
-        values["thinking_models"] = tuple(models)
+    for key in ("thinking_models", "models", "notify_command"):
+        if key in values:
+            items = values[key]
+            if (not isinstance(items, list) or not all(isinstance(item, str) and item.strip() for item in items)
+                    or (key != "thinking_models" and not items)):
+                raise ValueError(f"{key} must be an array of nonempty strings")
+            values[key] = tuple(items)
 
     settings = Settings(**values)
     if type(settings.repeats) is not int or settings.repeats < 1:
@@ -64,4 +73,15 @@ def load(path: Path = Path("canary.toml")) -> Settings:
         not isinstance(settings.seed_store, str) or not settings.seed_store.strip()
     ):
         raise ValueError("seed_store must be a nonempty path")
+    if type(settings.watch_versions) is not int or not 1 <= settings.watch_versions <= 50:
+        raise ValueError("watch_versions must be an integer from 1 to 50")
+    if not isinstance(settings.hermes_tag, str) or not settings.hermes_tag.startswith("v"):
+        raise ValueError("hermes_tag must be a stable tag such as v0.23.2")
+    version_key(settings.hermes_tag[1:])
+    for key in ("keep_runtimes", "keep_hermes"):
+        value = getattr(settings, key)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{key} must be a nonnegative integer")
+    if type(settings.notify_on_success) is not bool:
+        raise ValueError("notify_on_success must be a boolean")
     return settings

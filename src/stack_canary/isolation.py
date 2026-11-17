@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .schedule import LABEL, PLIST_NAME
+
 
 _RELEVANT_LAUNCHD_LABEL = re.compile(r"hermes|ollama|nousresearch|canary", re.IGNORECASE)
 
@@ -241,6 +243,12 @@ def compare(before, after):
         previous, current = before.get(key), after.get(key)
         if key == "launchd":
             previous, current = _relevant_launchd_jobs(previous), _relevant_launchd_jobs(current)
+        if key in {"launchd", "launch_agents"}:
+            own = LABEL if key == "launchd" else PLIST_NAME
+            previous, current = (
+                {name: value for name, value in entries.items() if name != own}
+                if entries is not None else None for entries in (previous, current)
+            )
         if previous != current:
             target = warnings if key in {"launchd", "listeners"} else diff
             if key == "hermes_config_keys":
@@ -266,4 +274,12 @@ def compare(before, after):
             else:
                 target[key] = {"before": previous, "after": current}
     status = "isolation_violated" if diff else "warning" if warnings else "pass"
-    return {"status": status, "diff": diff, "warnings": warnings}
+    audit = {"status": status, "diff": diff, "warnings": warnings}
+    for key, own in (("launchd", LABEL), ("launch_agents", PLIST_NAME)):
+        previous, current = before.get(key) or {}, after.get(key) or {}
+        if own in previous or own in current:
+            audit.setdefault("schedule", {})[own] = {
+                "before": {name: previous[name] for name in (own,) if name in previous},
+                "after": {name: current[name] for name in (own,) if name in current},
+            }
+    return audit

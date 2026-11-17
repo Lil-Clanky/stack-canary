@@ -5,9 +5,10 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, config, managed, report, results
+from . import __version__, config, maintenance, managed, report, results, schedule, watch
 from .checks import CHECKS
 from .checks.api import run_checks
+from .runtime_ollama import OllamaRuntime, canary_home
 from .transport import loopback_url, request
 
 
@@ -145,12 +146,38 @@ def main(argv: list[str] | None = None) -> int:
     reporting.add_argument("--out", type=Path, default=Path("report/index.html"))
     reporting.add_argument("--repro-dir", type=Path, default=Path("repro"))
     reporting.add_argument("--all-models", action="store_true", help="include models from older runs")
+    for command, help_text in (
+        ("watch", "run checks for newly released Ollama versions"),
+        ("gc", "remove old managed runtimes and Hermes installs"),
+    ):
+        action = commands.add_parser(command, help=help_text)
+        action.add_argument("--dry-run", action="store_true", help="show the plan without applying it")
+    scheduling = commands.add_parser("schedule", help="manage the optional macOS watcher")
+    actions = scheduling.add_subparsers(dest="action", required=True)
+    install = actions.add_parser("install", help="install the daily LaunchAgent")
+    install.add_argument("--at", required=True, metavar="HH:MM")
+    install.add_argument("--replace", action="store_true")
+    install.add_argument("--print", dest="print_only", action="store_true")
+    actions.add_parser("uninstall", help="remove the Stack Canary LaunchAgent")
+    actions.add_parser("status", help="show the schedule and last watch result")
     args = parser.parse_args(argv)
     if args.command == "run":
         return _run(args)
     try:
+        if args.command == "watch":
+            return watch.run(config.load(), dry_run=args.dry_run)
+        if args.command == "gc":
+            runtime = OllamaRuntime(canary_home(), config.load())
+            if args.dry_run:
+                maintenance.collect(runtime, dry_run=True)
+            else:
+                with runtime.exclusive():
+                    maintenance.collect(runtime)
+            return 0
+        if args.command == "schedule":
+            return schedule.run(args)
         output, drafts = report.generate(args.results, args.out, args.repro_dir, all_models=args.all_models)
-    except (OSError, ValueError) as error:
+    except managed.INFRA_ERRORS as error:
         print(f"canary: {error}", file=sys.stderr)
         return 2
     print(f"Report written to {output} ({drafts} repro drafts)")

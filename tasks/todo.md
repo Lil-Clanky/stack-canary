@@ -60,6 +60,15 @@ or Canary, case-insensitively. It still compares every LaunchAgent plist.
 ### Next steps
 
 - [ ] Verify newer Hermes tags for macOS foreground mode.
-- [ ] Schedule runs as a separate phase with the user's explicit approval.
-  Launchd scheduling adds a LaunchAgent in the user's domain. Cron scheduling
-  changes the user's crontab.
+- [ ] Test the optional schedule on the Mac with the user's explicit approval
+  to create the LaunchAgent in their domain.
+
+## Phase 8
+
+- [x] Share the managed run lock and recover stale owners.
+- [x] Watch the release listings and run only incomplete Ollama versions.
+- [x] Write nightly summaries, regenerate reports, and support an optional
+  notification command.
+- [x] Prune old managed releases while keeping the master store and results.
+- [x] Implement the opt-in macOS schedule and record its exact audit exemption.
+- [x] Cover the scheduler with offline launchd mocks.
