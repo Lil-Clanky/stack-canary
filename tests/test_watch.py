@@ -87,6 +87,19 @@ def test_nothing_new(offline, home, capsys):
     assert _summary()["status"] == "nothing new"
 
 
+@pytest.mark.parametrize("usable_b6", [True, False])
+def test_watch_merges_separate_api_and_tagged_b6_files(offline, home, usable_b6):
+    a = _result("1.2.3")
+    a["models"][0]["checks"].pop()
+    b = _result("1.2.3")
+    b["models"][0]["checks"] = b["models"][0]["checks"][-1:]
+    if not usable_b6:
+        b["isolation"] = {"status": "isolation_violated"}
+    _history(home, _result("1.2.2"), a, b)
+    assert main(["watch"]) == (0 if usable_b6 else 1)
+    assert offline[1] == ([] if usable_b6 else ["1.2.3"])
+
+
 @pytest.mark.parametrize("previous_error", [False, True])
 def test_new_or_incomplete_ollama_and_summary(offline, home, previous_error):
     old = [_result("1.2.2")]

@@ -32,22 +32,21 @@ def _tags(data):
     return set(data.get("hermes_tags") or ()) | report._harness_records(data).keys()
 
 
-def _complete(data, settings):
-    if (not data.get("runtime") or data.get("infra_error") or data.get("harness_errors")
-            or (data.get("isolation") or {}).get("status") == "isolation_violated"):
-        return False
-    tags = _tags(data)
-    models = {item["name"]: item for item in data["models"]
-              if isinstance(item, dict) and isinstance(item.get("name"), str)}
-    for name in settings.models:
-        model = models.get(name)
-        if model is None or model.get("model_error"):
-            return False
-        cells = dict(_checks(model, tags, settings.hermes_tag))
-        if any(cells.get(check, {}).get("outcome") not in {"pass", "fail", "flaky", "timeout", "n/a"}
-               for check in report.CHECK_IDS):
-            return False
-    return True
+def _eligible_history(history):
+    return [run for run in history if run.data.get("runtime") and not run.data.get("infra_error")
+            and not run.data.get("harness_errors")
+            and (run.data.get("isolation") or {}).get("status") != "isolation_violated"]
+
+
+def _tested_versions(history, settings):
+    eligible = _eligible_history(history)
+    cells, _, _ = report.merge(eligible)
+    accepted = {"pass", "fail", "flaky", "timeout", "n/a"}
+    return {version for version in {run.version for run in eligible}
+            if all((cell := cells.get((version, model, check,
+                                       settings.hermes_tag if check == "B6" else ""))) is not None
+                   and cell.outcome in accepted and not cell.model.get("model_error")
+                   for model in settings.models for check in report.CHECK_IDS)}
 
 
 def _regressions(history, current, tag):
@@ -163,7 +162,7 @@ def _watch(runtime, dry_run):
         managed.validate_models(settings.models)
         before = None if dry_run else isolation.snapshot()
         history = report.load_runs(directories)
-        tested = {item.version for item in history if _complete(item.data, settings)}
+        tested = _tested_versions(history, settings)
         options = {"fetch": managed.fetch_url, "cache_root": root, "read_only": dry_run}
         recent = ollama_releases(f"last:{settings.watch_versions}", asset_name=settings.asset_name, **options)
         releases = [release for release in recent if release.version not in tested]
@@ -192,7 +191,7 @@ def _watch(runtime, dry_run):
         summary["new_unverified_hermes"] = [tag for tag in summary["unverified_hermes"] if tag not in seen]
         pending = []
         if hermes_verify.available():
-            known, _, _ = report.merge(history)
+            known, _, _ = report.merge(_eligible_history(history))
             for tag in newer:
                 if registry.get(tag, {}).get("status") != "verified":
                     continue
