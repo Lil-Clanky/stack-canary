@@ -4,6 +4,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -79,6 +80,69 @@ def _file_fingerprint(path, root):
         return None
 
 
+_YAML_KEY = re.compile(r"""^( *)(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)'|([\w.-]+(?: +[\w.-]+)*)):(?:[ \t]+|$)(.*)$""")
+
+
+def _config_fingerprint(path, root):
+    """Fingerprint block mapping keys and their values without retaining raw content."""
+    try:
+        resolved = path.resolve(strict=True)
+        if not resolved.is_relative_to(root) or not resolved.is_file():
+            return None, {}
+        data = resolved.read_bytes()
+    except (OSError, RuntimeError):
+        return None, {}
+    entries = {}
+    parents = []
+    scalar = None
+    for line in data.decode("utf-8-sig", errors="replace").splitlines():
+        stripped = line.lstrip(" ")
+        indent = len(line) - len(stripped)
+        if scalar is not None and indent > scalar[0]:
+            entries[scalar[1]].update(("\n" + line).encode())
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        scalar = None
+        if stripped == "-" or stripped.startswith("- "):
+            # PyYAML can emit sequences aligned with their key. Keep their
+            # content under that key and never interpret an item as a key.
+            while parents and parents[-1][0] > indent:
+                parents.pop()
+            if parents:
+                name = parents[-1][1]
+                entries[name].update(("\n" + line).encode())
+                scalar = indent, name
+            continue
+        while parents and parents[-1][0] >= indent:
+            parents.pop()
+        match = _YAML_KEY.match(line)
+        if not match:
+            continue
+        _, double, single, plain, value = match.groups()
+        key = double if double is not None else single.replace("''", "'") if single is not None else plain
+        name = (*parents[-1][1], key) if parents else (key,)
+        value = value.strip()
+        is_container = not value or value.startswith("#")
+        entries[name] = hashlib.sha256(b"" if is_container else value.encode())
+        if is_container:
+            parents.append((indent, name))
+        else:
+            scalar = indent, name
+    return hashlib.sha256(data).hexdigest(), {key: value.hexdigest() for key, value in entries.items()}
+
+
+def _launch_agents(home):
+    directory = home / "Library/LaunchAgents"
+    try:
+        root = home.resolve(strict=True)
+        if not directory.resolve().is_relative_to(root):
+            return {}
+        return {path.name: _file_fingerprint(path, root) for path in directory.glob("*.plist")}
+    except (OSError, RuntimeError):
+        return None
+
+
 def _api(path):
     # This narrowly scoped probe is read-only. Managed clients still refuse 11434.
     conn = http.client.HTTPConnection("127.0.0.1", 11434, timeout=1)
@@ -113,8 +177,14 @@ def _services():
         ["/usr/sbin/lsof", "-nP", "-iTCP:9119", "-iTCP:9120", "-sTCP:LISTEN", "-Fpcn"],
         accepted=(0, 1),
     )
-    rows = (sorted(" ".join(line.split()) for line in jobs.splitlines()
-                   if "ollama" in line.lower() or "hermes" in line.lower()) if jobs is not None else None)
+    rows = None
+    if jobs is not None:
+        rows = {}
+        for line in jobs.splitlines():
+            fields = line.split()
+            if len(fields) == 3 and (fields[0] == "-" or fields[0].isdecimal()):
+                pid, _, label = fields
+                rows[label] = int(pid) if pid != "-" else None
     # Preserve lsof's process-to-listener association while normalizing row order.
     groups = {}
     if listeners is not None:
@@ -139,6 +209,7 @@ def snapshot(home=None):
         hermes = (home / ".hermes").resolve()
     except (OSError, RuntimeError):
         hermes = None
+    config_sha, config_keys = _config_fingerprint(hermes / "config.yaml", hermes) if hermes else (None, {})
     jobs, listeners = _services()
     return {
         "manifests_sha256": _manifests(models / "manifests", models) if models else None,
@@ -146,9 +217,11 @@ def snapshot(home=None):
         "blobs": _blobs(models / "blobs", models) if models else None,
         "ollama_version": _api("/api/version"),
         "ollama_tags": _api("/api/tags"),
-        "hermes_config_sha256": _file_fingerprint(hermes / "config.yaml", hermes) if hermes else None,
+        "hermes_config_sha256": config_sha,
+        "hermes_config_keys": config_keys,
         "hermes_env_sha256": _file_fingerprint(hermes / ".env", hermes) if hermes else None,
         "launchd": jobs,
+        "launch_agents": _launch_agents(home),
         "listeners": listeners,
     }
 
@@ -159,7 +232,23 @@ def compare(before, after):
         previous, current = before.get(key), after.get(key)
         if previous != current:
             target = warnings if key in {"launchd", "listeners"} else diff
-            if key == "blobs" and isinstance(previous, dict) and isinstance(current, dict):
+            if key == "hermes_config_keys":
+                previous, current = previous or {}, current or {}
+                diff[key] = {
+                    "added": sorted(".".join(name) for name in current.keys() - previous.keys()),
+                    "removed": sorted(".".join(name) for name in previous.keys() - current.keys()),
+                    "changed": sorted(".".join(name) for name in previous.keys() & current.keys()
+                                      if previous[name] != current[name]),
+                }
+            elif key == "launchd" and isinstance(previous, dict) and isinstance(current, dict):
+                added, removed = sorted(current.keys() - previous.keys()), sorted(previous.keys() - current.keys())
+                if added or removed:
+                    diff[key] = {"added": added, "removed": removed}
+                pids = {label: {"before": previous[label], "after": current[label]}
+                        for label in sorted(previous.keys() & current.keys()) if previous[label] != current[label]}
+                if pids:
+                    warnings[key] = pids
+            elif key in {"blobs", "launch_agents"} and isinstance(previous, dict) and isinstance(current, dict):
                 target[key] = {name: {"before": previous.get(name), "after": current.get(name)}
                                for name in sorted(previous.keys() | current.keys())
                                if previous.get(name) != current.get(name)}

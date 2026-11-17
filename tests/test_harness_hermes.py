@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from fake_ollama import running
-from stack_canary import harness_hermes, managed
+from stack_canary import harness_hermes, hermes_foreground, managed
 from stack_canary.cli import main
 from stack_canary.config import Settings
 from stack_canary.harness_hermes import HermesHarness, hermes_env, hermes_tags
@@ -58,9 +58,13 @@ def test_environment_uses_isolated_paths(home, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "user-secret")
     work = home / "work"
     env = hermes_env(home, TAG, work)
-    assert set(key for key in env if key.startswith("HERMES_")) == {"HERMES_HOME", "HERMES_WRITE_SAFE_ROOT"}
+    assert set(key for key in env if key.startswith("HERMES_")) == {
+        "HERMES_HOME", "HERMES_REAL_HOME", "HERMES_WRITE_SAFE_ROOT",
+    }
     assert all(key not in env for key in ("OLLAMA_HOST", "ANTHROPIC_API_KEY"))
     assert Path(env["HOME"]).is_relative_to(home)
+    assert env["HOME"] == env["HERMES_REAL_HOME"]
+    assert Path(env["HOME"]) != Path(env["HERMES_HOME"]) / "home"
     assert Path(env["TMPDIR"]).is_relative_to(Path(env["HOME"]))
     assert Path(env["HERMES_WRITE_SAFE_ROOT"]) == work
 
@@ -241,7 +245,8 @@ def test_cached_harness_rebuilds_when_venv_python_disappears(home, monkeypatch):
 @pytest.mark.parametrize(("mode", "reason"), [
     ("ok", None), ("wrong_content", "file_mismatch"), ("no_file", "file_missing"),
     ("no_write_event", "no_write_event"), ("nonzero_exit", "harness_exit_nonzero"),
-    ("hang", "timeout_deadline"), ("unsupported_cli", "harness_cli_unsupported"),
+    ("hang", "harness_not_started"), ("unsupported_cli", "harness_cli_unsupported"),
+    ("draining", "harness_not_started"),
     ("leftover_child", None),
 ])
 def test_b6_attempt_modes(home, settings, mode, reason):
@@ -251,7 +256,8 @@ def test_b6_attempt_modes(home, settings, mode, reason):
         attempt = harness.attempt(upstream.endpoint, "a", 1)
     assert attempt["reason"] == reason
     assert attempt["attribution"] == ("harness" if reason else None)
-    if mode in {"hang", "unsupported_cli"}:
+    if mode in {"hang", "unsupported_cli", "draining"}:
+        assert attempt["outcome"] == "error"
         assert attempt["note"] == "before_first_request"
     assert harness_hermes.API_KEY not in attempt["argv"]
     if mode == "leftover_child":
@@ -271,6 +277,55 @@ def test_b6_attributes_upstream_http_error(home, settings):
     assert attempt["outcome"] == "fail"
     assert attempt["attribution"] == "runtime"
     assert attempt["proxy_exchanges"][0]["response"]["status"] == 500
+
+
+@pytest.mark.parametrize(("mode", "outcome", "attribution"), [
+    ("probe_pass", "pass", None), ("probe_fail", "fail", "harness"),
+])
+def test_b6_does_not_blame_ollama_for_probe_404(home, settings, mode, outcome, attribution):
+    harness = fake_harness(home, TAG, settings, lambda _: None, mode=mode)
+    with running() as upstream:
+        attempt = harness.attempt(upstream.endpoint, "a", 1)
+    assert attempt["outcome"] == outcome
+    assert attempt["attribution"] == attribution
+    probe, completion = attempt["proxy_exchanges"]
+    assert probe["request"]["path"] == "/api/v1/models"
+    assert probe["response"]["status"] == 404
+    assert completion["response"]["status"] == 200
+
+
+def test_unverified_macos_tag_cannot_install_or_probe(home, settings, monkeypatch, capsys):
+    monkeypatch.setattr(harness_hermes, "sys", type("OS", (), {"platform": "darwin", "stderr": sys.stderr}))
+    harness = HermesHarness(home, TAG, settings, lambda _: None,
+                            installer=lambda *args: pytest.fail("unexpected install"))
+    assert harness.metadata["gateway_mode"] == "disabled"
+    assert harness.check("unused", "a") == {
+        "check_id": "B6", "outcome": "error", "reason": "harness_requires_launchd",
+        "attribution": "harness", "attempts": [],
+    }
+    assert "B6 disabled on macOS" in capsys.readouterr().err
+    assert not home.exists()
+
+
+def test_audited_macos_commit_uses_foreground(home, settings, monkeypatch):
+    monkeypatch.setattr(harness_hermes, "sys", type("OS", (), {"platform": "darwin"}))
+    launcher = harness_hermes._bin(home / "harnesses/hermes/v0.23.2/venv", "hermes")
+    launcher.parent.mkdir(parents=True)
+    launcher.touch()
+    calls = []
+
+    def help_probe(argv, cwd, env, *, timeout):
+        calls.append(argv)
+        assert Path(env["HERMES_REAL_HOME"]).is_relative_to(home)
+        return "--oneshot --provider --base-url -m -t --query-file"
+
+    monkeypatch.setattr(harness_hermes, "_run", help_probe)
+    harness = HermesHarness(home, hermes_foreground.TAG, settings, lambda _: None,
+                            installer=lambda *args: (launcher, {"commit": hermes_foreground.COMMIT}))
+    assert harness.metadata["gateway_mode"] == "foreground"
+    assert calls == [[str(launcher), "chat", "--help"]]
+    env = harness._env(home / "work", profile=Path("attempt/h"))
+    assert Path(env["HERMES_GATEWAY_LOCK_DIR"]) == home / "attempt/h/locks"
 
 
 def test_managed_b6_end_to_end(home, settings, monkeypatch):

@@ -1,9 +1,15 @@
 import io
 import json
+import os
+import time
+from types import SimpleNamespace
 from urllib.error import HTTPError
 
 import pytest
 
+from stack_canary import releases
+from stack_canary.harness_hermes import API as HERMES_API
+from stack_canary.harness_hermes import hermes_tags
 from stack_canary.releases import API_URL, DEFAULT_ASSET, ollama_releases
 
 SHA = "0a" * 32
@@ -81,3 +87,55 @@ def test_unknown_tag():
 def test_bad_release_spec(spec):
     with pytest.raises(ValueError):
         ollama_releases(spec, fetch=lambda *args, **kwargs: pytest.fail("fetched"))
+
+
+def test_cache_keeps_both_listings_for_an_hour(tmp_path):
+    calls = []
+
+    def fetch(url, *, headers):
+        calls.append(url)
+        rows = [release_record("1.2.3")] if url.startswith(API_URL) else [{"tag_name": "v0.23.2"}]
+        return io.BytesIO(json.dumps(rows).encode())
+
+    opts = {"fetch": fetch, "cache_root": tmp_path}
+    for _ in range(2):
+        assert hermes_tags("latest", **opts) == ["v0.23.2"]
+        assert ollama_releases("last:1", **opts)[0].version == "1.2.3"
+    assert calls == [HERMES_API + "?per_page=50", API_URL + "?per_page=50"]
+
+    cache = tmp_path / "release-cache/hermes.json"
+    expired = time.time() - 3601
+    os.utime(cache, (expired, expired))
+    assert hermes_tags("latest", **opts, read_only=True) == ["v0.23.2"]
+    assert cache.stat().st_mtime == pytest.approx(expired, abs=1)
+    assert hermes_tags("latest", **opts) == ["v0.23.2"]
+    assert hermes_tags("latest", **opts) == ["v0.23.2"]
+    assert calls[2:] == [HERMES_API + "?per_page=50"] * 2
+
+
+def test_gh_token_is_private_and_only_used_on_github_api(monkeypatch, capsys):
+    requests = []
+    calls = []
+
+    def command(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs["stderr"] == releases.subprocess.DEVNULL
+        return SimpleNamespace(returncode=0, stdout="gh-test-secret\n")
+
+    def open_url(request, *, timeout):
+        requests.append(request)
+        return io.BytesIO(b"[]")
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(releases.subprocess, "run", command)
+    monkeypatch.setattr(releases, "build_opener", lambda *args: SimpleNamespace(open=open_url))
+    assert releases._api_json(API_URL, releases.fetch_url) == []
+    releases.fetch_url(SUM_URL, headers={"User-Agent": "stack-canary"}).close()
+    monkeypatch.setenv("GITHUB_TOKEN", "env-test-secret")
+    assert releases._api_json(API_URL, releases.fetch_url) == []
+    assert calls == [["gh", "auth", "token", "--hostname", "github.com"]]
+    assert [req.unredirected_hdrs.get("Authorization") for req in requests] == [
+        "Bearer gh-test-secret", None, "Bearer env-test-secret",
+    ]
+    assert all("Authorization" not in req.headers for req in requests)
+    assert capsys.readouterr() == ("", "")

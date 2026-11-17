@@ -17,9 +17,10 @@ from collections import deque
 from contextlib import suppress
 from pathlib import Path
 
+from . import hermes_foreground
 from .outcome import aggregate
-from .proxy import RecordingProxy
-from .releases import _api_json, _stable_version, fetch_url, version_key
+from .proxy import RecordingProxy, broken_completion
+from .releases import _api_json, _stable_version, fetch_url, release_list, version_key
 from .runtime_ollama import OllamaError, _state_path, safe_path
 
 REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
@@ -43,7 +44,7 @@ def _tag_version(tag):
     return version
 
 
-def hermes_tags(spec, *, fetch=fetch_url):
+def hermes_tags(spec, *, fetch=fetch_url, cache_root=None, read_only=False):
     if spec == "latest":
         spec = "last:1"
     if not spec.startswith("last:"):
@@ -55,9 +56,7 @@ def hermes_tags(spec, *, fetch=fetch_url):
     count = spec.removeprefix("last:")
     if not count.isdecimal() or not 1 <= int(count) <= 50:
         raise ValueError("Hermes last:N requires N from 1 to 50")
-    listing = _api_json(API + "?per_page=50", fetch)
-    if not isinstance(listing, list):
-        raise ValueError("expected a Hermes release list")
+    listing = release_list(API, fetch, cache_root=cache_root, cache_name="hermes.json", read_only=read_only)
     tags = set()
     for row in listing:
         if _stable_version(row) is None:
@@ -95,10 +94,11 @@ def _canary_dir(root, relative):
     return path
 
 
-def hermes_env(root, tag, workdir):
+def hermes_env(root, tag, workdir, *, profile=None):
     _tag_version(tag)
-    hermes_home = _canary_dir(root, Path("homes") / f"hermes-{tag}")
-    home = _canary_dir(root, hermes_home.relative_to(root) / "home")
+    hermes_home = _canary_dir(root, profile if profile is not None else Path("homes") / f"hermes-{tag}")
+    # Hermes repairs HOME=<profile>/home back to the OS account for subprocesses.
+    home = _canary_dir(root, hermes_home.relative_to(root) / "os-home")
     tmp = _canary_dir(root, home.relative_to(root) / "tmp")
     system_path = os.defpath
     if os.name == "nt":
@@ -108,6 +108,7 @@ def hermes_env(root, tag, workdir):
         **_clean_env(home, tmp),
         "PATH": system_path,
         "HERMES_HOME": str(hermes_home),
+        "HERMES_REAL_HOME": str(home),
         "HERMES_WRITE_SAFE_ROOT": str(safe_path(root, workdir)),
         "OPENAI_API_KEY": API_KEY,
     }
@@ -281,6 +282,36 @@ def invocation_rejected(evidence):
     return any(isinstance(message, str) and CLI_REJECTION.search(message) for message in messages)
 
 
+def classify_attempt(attempt):
+    """Apply current attribution rules to live and saved evidence."""
+    if attempt["outcome"] == "pass":
+        return {**attempt, "attribution": None}
+    if invocation_rejected(attempt):
+        return {**attempt, "outcome": "error", "reason": "harness_cli_rejected", "attribution": "canary"}
+    if "proxy_exchanges" not in attempt:
+        return attempt
+    exchanges = attempt["proxy_exchanges"] or []
+    if not exchanges:
+        reason = attempt.get("reason")
+        if reason not in {"harness_cli_unsupported", "harness_requires_launchd", "harness_cli_rejected"}:
+            reason = "harness_not_started"
+        return {**attempt, "outcome": "error", "reason": reason, "attribution": "harness",
+                "note": "before_first_request"}
+    return {**attempt, "attribution": "runtime" if any(map(broken_completion, exchanges)) else "harness"}
+
+
+def b6_summary(attempts):
+    outcome = aggregate(item["outcome"] for item in attempts)
+    if outcome == "pass":
+        return {"outcome": outcome, "attribution": None}
+    if outcome == "error":
+        errors = [item for item in attempts if item["outcome"] == "error"]
+        primary = next((item for item in errors if item.get("attribution") == "canary"), errors[0])
+        return {"outcome": outcome, "reason": primary.get("reason"), "attribution": primary.get("attribution")}
+    attribution = "runtime" if any(item.get("attribution") == "runtime" for item in attempts) else "harness"
+    return {"outcome": outcome, "attribution": attribution}
+
+
 def _local_ollama_name():
     try:
         addresses = socket.getaddrinfo("ollama.localhost", None, type=socket.SOCK_STREAM)
@@ -334,7 +365,8 @@ def _cleanup(process, env, venv, preexisting):
             if process.poll() is None:
                 process.kill()
     else:
-        with suppress(ProcessLookupError):
+        process.poll()
+        with suppress(ProcessLookupError, PermissionError):
             os.killpg(process.pid, signal.SIGKILL)
     process.wait(timeout=10)
 
@@ -368,7 +400,16 @@ class HermesHarness:
         self.tag = tag
         self.settings = settings
         _tag_version(tag)
+        macos = sys.platform == "darwin" and argv_factory is None
+        self.disabled = macos and tag != hermes_foreground.TAG
+        if self.disabled:
+            self._disable({"tag": tag})
+            return
         self.executable, self.metadata = installer(root, tag, guard)
+        if macos and self.metadata.get("commit") != hermes_foreground.COMMIT:
+            self._disable(self.metadata)
+            return
+        self.foreground = macos
         executable = Path(self.executable)
         if not executable.is_absolute() or not safe_path(root, executable).is_file():
             raise ValueError("Hermes executable must be inside the canary home")
@@ -380,43 +421,40 @@ class HermesHarness:
         source = self.venv.parent / "src/hermes_cli/gateway_chat.py"
         self.flags = detected_flags(help_text, _gateway_options(root, source))
         self.supported = REQUIRED <= self.flags and bool({"--query-file", "-q"} & self.flags)
-        self.metadata = {**self.metadata, "flags": sorted(self.flags)}
+        self.metadata = {**self.metadata, "flags": sorted(self.flags),
+                         "gateway_mode": "foreground" if self.foreground else "default_gateway"}
 
-    def _env(self, work):
-        env = hermes_env(self.root, self.tag, work)
+    def _disable(self, metadata):
+        self.disabled = True
+        self.metadata = {**metadata, "gateway_mode": "disabled", "reason": "harness_requires_launchd"}
+        print(f"canary: Hermes {self.tag}: B6 disabled on macOS (harness_requires_launchd)", file=sys.stderr)
+
+    def _env(self, work, *, profile=None):
+        env = hermes_env(self.root, self.tag, work, profile=profile)
         env["PATH"] = os.pathsep.join((str(self.bindir), env["PATH"]))
+        if profile is not None:
+            env["HERMES_GATEWAY_LOCK_DIR"] = str(Path(env["HERMES_HOME"]) / "locks")
         return env
 
     def check(self, endpoint, model):
+        if self.disabled:
+            return {"check_id": "B6", "outcome": "error", "reason": "harness_requires_launchd",
+                    "attribution": "harness", "attempts": []}
         attempts = [
             self.attempt(endpoint, model, attempt)
             for attempt in range(1, self.settings.repeats + 1)
         ]
-        outcome = aggregate(item["outcome"] for item in attempts)
-        record = {"check_id": "B6", "outcome": outcome, "attempts": attempts}
-        if outcome == "error":
-            record["reason"] = "harness_cli_rejected"
-        return record
+        return {"check_id": "B6", "attempts": attempts, **b6_summary(attempts)}
 
     def attempt(self, endpoint, model, attempt):
         started = time.monotonic()
         evidence = {"argv": [], "exit_code": None, "events": [], "stderr_tail": [],
                     "file_bytes": None, "proxy_exchanges": [], "leftover_processes": [],
-                    "hermes_sees_ollama": False, "attribution": "harness"}
+                    "hermes_sees_ollama": False}
         reason = self._execute(endpoint, model, evidence) if self.supported else "harness_cli_unsupported"
-        if invocation_rejected(evidence):
-            reason = "harness_cli_rejected"
-            evidence["attribution"] = "canary"
-        elif any(exchange["error"] for exchange in evidence["proxy_exchanges"]):
-            evidence["attribution"] = "runtime"
-        elif reason is None:
-            evidence["attribution"] = None
-        elif not evidence["proxy_exchanges"]:
-            evidence["note"] = "before_first_request"
-        outcome = ("error" if reason == "harness_cli_rejected" else
-                   "timeout" if reason == "timeout_deadline" else "fail" if reason else "pass")
-        return {"check_id": "B6", "attempt": attempt, "outcome": outcome, "reason": reason,
-                "duration_s": time.monotonic() - started, **evidence}
+        outcome = "timeout" if reason == "timeout_deadline" else "fail" if reason else "pass"
+        return classify_attempt({"check_id": "B6", "attempt": attempt, "outcome": outcome, "reason": reason,
+                                 "duration_s": time.monotonic() - started, **evidence})
 
     def _command(self, query, prompt, workdir, model, url):
         argv = [*self.argv, "chat", "--oneshot",
@@ -433,7 +471,8 @@ class HermesHarness:
         return argv
 
     def _execute(self, endpoint, model, evidence):
-        parent = _canary_dir(self.root, Path("attempts") / f"hermes-{self.tag}")
+        relative = Path("b6") if self.foreground else Path("attempts") / f"hermes-{self.tag}"
+        parent = _canary_dir(self.root, relative)
         attempt_dir = safe_path(self.root, Path(tempfile.mkdtemp(dir=parent, prefix="b6-")))
         work = safe_path(self.root, attempt_dir / "work")
         work.mkdir()
@@ -443,7 +482,8 @@ class HermesHarness:
                   f"text and nothing else: {token}. Do not use any other tool. Reply DONE when finished.")
         query = safe_path(self.root, attempt_dir / "query.txt")
         query.write_text(prompt, encoding="utf-8")
-        env = self._env(work)
+        profile = attempt_dir.relative_to(self.root) / "h" if self.foreground else None
+        env = self._env(work, profile=profile)
         preexisting = _owned_processes(env, self.venv)
         timed_out = False
         with RecordingProxy(endpoint, timeout=self.settings.stall_s) as proxy:
@@ -451,6 +491,15 @@ class HermesHarness:
             host = "ollama.localhost" if evidence["hermes_sees_ollama"] else "127.0.0.1"
             argv = self._command(query, prompt, work, model, f"http://{host}:{proxy.server_port}/v1")
             evidence["argv"] = ["[redacted]" if arg == API_KEY else arg for arg in argv]
+            if self.foreground:
+                gateway_log = safe_path(self.root, attempt_dir / "gateway.log")
+                evidence["gateway_log"] = str(gateway_log)
+                evidence["gateway_argv"] = [*self.argv, *hermes_foreground.GATEWAY_ARGS]
+                # A POSIX venv's interpreter may link to the base interpreter.
+                # Execute through the venv path so Python loads its pyvenv.cfg.
+                python = _bin(self.venv, "python")
+                argv = [str(python), str(Path(hermes_foreground.__file__).resolve()),
+                        str(min(60, self.settings.hermes_deadline_s)), str(gateway_log), *argv]
             stdout = safe_path(self.root, attempt_dir / "stdout.log")
             stderr = safe_path(self.root, attempt_dir / "stderr.log")
             with stdout.open("wb") as out, stderr.open("wb") as err:

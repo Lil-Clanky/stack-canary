@@ -15,6 +15,20 @@ HOP_HEADERS = {
 }
 
 
+def _completion(method, target):
+    return method == "POST" and target.partition("?")[0] == "/v1/chat/completions"
+
+
+def broken_completion(exchange):
+    request = exchange.get("request") or {}
+    if not _completion(request.get("method"), request.get("path") or ""):
+        return False
+    status = (exchange.get("response") or {}).get("status")
+    return (isinstance(status, int) and not 200 <= status < 300
+            or exchange.get("error") in {"bad_json", "bad_sse", "no_done"}
+            or isinstance(status, int) and exchange.get("error") == "upstream_error")
+
+
 def _forwarded(headers):
     blocked = HOP_HEADERS | {
         value.strip().lower()
@@ -130,11 +144,17 @@ class _Handler(BaseHTTPRequestHandler):
                 capture["status"] = response.status
                 capture["headers"] = response.getheaders()
                 self._relay(response, capture, exchange, started)
-        except (OSError, http.client.HTTPException):
-            exchange["error"] = exchange["error"] or "upstream_error"
-            if capture["status"] is None:
-                with suppress(OSError):
+        except (OSError, http.client.HTTPException) as error:
+            if self.server._closing:
+                self._client_disconnected(exchange, error)
+            else:
+                exchange["error"] = exchange["error"] or "upstream_error"
+                exchange["upstream_error"] = {"type": type(error).__name__, "message": str(error)}
+            if capture["status"] is None and not self.server._closing:
+                try:
                     self.send_error(502, "managed Ollama did not answer")
+                except OSError as disconnect:
+                    self._client_disconnected(exchange, disconnect)
         finally:
             connection.close()
             if upstream_socket is not None:
@@ -145,7 +165,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _relay(self, response, capture, exchange, started):
         sse = response.getheader("Content-Type", "").lower().startswith("text/event-stream")
         no_body = self.command == "HEAD" or response.status in {204, 304}
-        if response.status != 200:
+        completion = _completion(self.command, self.path)
+        if not 200 <= response.status < 300:
             exchange["error"] = "http_error"
         if sse:
             capture["lines"] = []
@@ -162,20 +183,21 @@ class _Handler(BaseHTTPRequestHandler):
                 done = True
             else:
                 try:
-                    parse_json(data)
+                    if not isinstance(parse_json(data), dict) and completion:
+                        raise ValueError("expected a JSON object")
                 except (ValueError, RecursionError):
                     exchange["error"] = exchange["error"] or "bad_sse"
 
         # Relay a close-delimited body unless the upstream supplied a length.
-        writer = True
         try:
             self.send_response_only(response.status, response.reason)
             for name, value in _forwarded(capture["headers"]):
                 self.send_header(name, value)
             self.send_header("Connection", "close")
             self.end_headers()
-        except OSError:
-            writer = False
+        except OSError as error:
+            self._client_disconnected(exchange, error)
+            return
 
         try:
             while not no_body and (data := response.read1(8192)):
@@ -184,26 +206,35 @@ class _Handler(BaseHTTPRequestHandler):
                     while (end := pending.find(b"\n")) >= 0:
                         sse_line(bytes(pending[:end + 1]))
                         del pending[:end + 1]
-                if writer:
-                    try:
-                        self.wfile.write(data)
-                        self.wfile.flush()
-                    except OSError:
-                        writer = False
+                try:
+                    self.wfile.write(data)
+                    self.wfile.flush()
+                except OSError as error:
+                    self._client_disconnected(exchange, error)
+                    return
             if response.length and not no_body:
-                exchange["error"] = exchange["error"] or "upstream_error"
+                raise http.client.IncompleteRead(b"", response.length)
         finally:
-            if sse:
-                if pending:
-                    sse_line(bytes(pending))
-                if not done:
-                    exchange["error"] = exchange["error"] or "no_done"
-            else:
+            if not sse:
                 capture["body"] = _text(pending)
-                if not no_body and exchange["error"] is None:
-                    try:
-                        parse_json(bytes(pending))
-                    except (ValueError, RecursionError):
-                        exchange["error"] = "bad_json"
+        if self.server._closing and response.length is None and not done:
+            self._client_disconnected(exchange, ConnectionAbortedError("proxy stopped while reading the body"))
+            return
+        if sse:
+            if pending:
+                sse_line(bytes(pending))
+            if not done:
+                exchange["error"] = exchange["error"] or "no_done"
+        elif (not no_body or completion) and exchange["error"] is None:
+            try:
+                if not isinstance(parse_json(bytes(pending)), dict) and completion:
+                    raise ValueError("expected a JSON object")
+            except (ValueError, RecursionError):
+                exchange["error"] = "bad_json"
+
+    @staticmethod
+    def _client_disconnected(exchange, error):
+        exchange["error"] = exchange["error"] or "client_disconnect"
+        exchange["client_disconnect"] = {"type": type(error).__name__, "message": str(error)}
 
     do_GET = do_POST = do_HEAD = do_OPTIONS = do_PUT = do_DELETE = do_PATCH = _handle

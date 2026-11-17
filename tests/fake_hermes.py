@@ -30,12 +30,20 @@ def main():
     if mode == "cli_usage":
         print("usage: hermes chat [options]", file=sys.stderr)
         return 2
+    if mode == "draining":
+        print("Error: Gateway draining: not_ready", file=sys.stderr)
+        return 1
     base = args[args.index("--base-url") + 1]
     model = args[args.index("-m") + 1]
     query = Path(args[args.index("--query-file") + 1]).read_text()
     token = re.search(r"STACK-CANARY-[a-f0-9]{8}", query)[0]
     body = json.dumps({"model": model, "messages": [{"role": "user", "content": query}]}).encode()
     opener = build_opener(ProxyHandler({}))
+    if mode in {"probe_pass", "probe_fail"}:
+        try:
+            opener.open(base.removesuffix("/v1") + "/api/v1/models", timeout=2).close()
+        except HTTPError as error:
+            error.close()
     try:
         headers = {"Content-Type": "application/json", "Authorization": "Bearer test-key"}
         with opener.open(Request(base + "/chat/completions", body, headers), timeout=2) as response:
@@ -43,7 +51,7 @@ def main():
     except HTTPError:
         return 1
 
-    if mode != "no_file":
+    if mode not in {"no_file", "probe_fail"}:
         Path("canary.txt").write_bytes(("incorrect" if mode == "wrong_content" else token + "\n").encode())
     if mode != "no_write_event":
         print(json.dumps({"type": "tool_use", "name": "write_file"}))

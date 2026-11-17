@@ -3,8 +3,12 @@
 import json
 import os
 import re
+import subprocess
 import sys
+import time
 from dataclasses import dataclass
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -13,6 +17,7 @@ API_URL = "https://api.github.com/repos/ollama/ollama/releases"
 DEFAULT_ASSET = "ollama-darwin.tgz"
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 SHA256 = re.compile(r"[0-9a-fA-F]{64}")
+LIST_TTL_S = 60 * 60
 
 
 @dataclass(frozen=True)
@@ -49,9 +54,22 @@ class _HttpsRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _gh_token():
+    try:
+        result = subprocess.run(["gh", "auth", "token", "--hostname", "github.com"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def fetch_url(url: str, *, headers: dict[str, str]):
     _https_url(url)
     request = Request(url)
+    if urlsplit(url).hostname == "api.github.com" and "Authorization" not in headers:
+        if token := _gh_token():
+            headers = {**headers, "Authorization": f"Bearer {token}"}
     for name, value in headers.items():
         if name == "Authorization":
             request.add_unredirected_header(name, value)
@@ -62,10 +80,41 @@ def fetch_url(url: str, *, headers: dict[str, str]):
 
 def _api_json(url, fetch):
     headers = {"User-Agent": "stack-canary"}
-    if token := os.environ.get("GITHUB_TOKEN"):
+    if urlsplit(url).hostname == "api.github.com" and (token := os.environ.get("GITHUB_TOKEN")):
         headers["Authorization"] = f"Bearer {token}"
     with fetch(url, headers=headers) as stream:
         return json.load(stream)
+
+
+def release_list(url, fetch, *, cache_root=None, cache_name, read_only=False):
+    """Read a fresh cache entry or retrieve and atomically cache the GitHub listing."""
+    from .runtime_ollama import _state_path
+
+    cache = (_state_path(cache_root, Path("release-cache") / cache_name)
+             if cache_root is not None else None)
+    if cache is not None:
+        try:
+            if 0 <= time.time() - cache.stat().st_mtime < LIST_TTL_S:
+                listing = json.loads(cache.read_bytes())
+                if isinstance(listing, list):
+                    return listing
+        except (OSError, ValueError, RecursionError):
+            pass
+    listing = _api_json(url + "?per_page=50", fetch)
+    if not isinstance(listing, list):
+        raise ValueError("expected a GitHub release list")
+    if cache is not None and not read_only:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = None
+        try:
+            with NamedTemporaryFile(dir=cache.parent, mode="w", encoding="utf-8", delete=False) as stream:
+                tmp = Path(stream.name)
+                json.dump(listing, stream)
+            tmp.replace(cache)
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
+    return listing
 
 
 def _stable_version(record: object) -> str | None:
@@ -107,7 +156,8 @@ def _asset(record: dict, name: str, fetch) -> Release | None:
     return Release(tag[1:], tag, name, url, sha.lower())
 
 
-def ollama_releases(spec: str, *, asset_name: str = DEFAULT_ASSET, fetch=fetch_url) -> list[Release]:
+def ollama_releases(spec: str, *, asset_name: str = DEFAULT_ASSET, fetch=fetch_url,
+                    cache_root=None, read_only=False) -> list[Release]:
     """Resolve newest-first releases with the requested asset."""
     asset_filename(asset_name)
     if spec.startswith("last:"):
@@ -115,9 +165,8 @@ def ollama_releases(spec: str, *, asset_name: str = DEFAULT_ASSET, fetch=fetch_u
         if not re.fullmatch(r"[0-9]+", count) or int(count) < 1:
             raise ValueError("use last:N with a positive release count")
         limit = int(count)
-        listing = _api_json(API_URL + "?per_page=50", fetch)
-        if not isinstance(listing, list):
-            raise ValueError("expected a GitHub release list")
+        listing = release_list(API_URL, fetch, cache_root=cache_root, cache_name="ollama.json",
+                               read_only=read_only)
         records = {
             version: record
             for record in listing

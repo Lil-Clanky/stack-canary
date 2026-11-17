@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from . import __version__, repro
 from .checks import CHECKS
-from .harness_hermes import invocation_rejected
+from .harness_hermes import b6_summary, classify_attempt
 from .releases import version_key
 from .runtime_ollama import canary_home, safe_path
 
@@ -53,6 +53,7 @@ a { color:var(--link) }
 .attempts { margin-top:.15rem; letter-spacing:.14em; line-height:1.15 }
 .attempts span { display:inline }
 .regression { color:var(--fail); font-weight:700; font-size:.78rem }
+.harness-failure { color:var(--timeout); font-weight:700; font-size:.78rem }
 .legend { display:flex; flex-wrap:wrap; gap:.8rem; list-style:none; padding:0 }
 """
 
@@ -142,14 +143,11 @@ def _remember(cells, cell):
 
 
 def _normalize_b6(record):
-    attempts = [
-        {**attempt, "outcome": "error", "reason": "harness_cli_rejected", "attribution": "canary"}
-        if invocation_rejected(attempt) else attempt
-        for attempt in record.get("attempts") or []
-    ]
-    if any(attempt.get("reason") == "harness_cli_rejected" for attempt in attempts):
-        return {**record, "outcome": "error", "reason": "harness_cli_rejected", "attempts": attempts}
-    return record
+    attempts = record.get("attempts") or []
+    if not attempts or any(item.get("outcome") not in {"pass", "fail", "timeout", "error"} for item in attempts):
+        return record
+    attempts = [classify_attempt(item) for item in attempts]
+    return {**record, **b6_summary(attempts), "attempts": attempts}
 
 
 def merge(runs):
@@ -252,7 +250,7 @@ def _drafts(cells, versions, directory, scope):
         version, model, check, tag = key
         older = versions[versions.index(version) + 1:]
         last_pass = next((v for v in older if (prior := cells.get((v, model, check, tag)))
-                          and prior.outcome == "pass"), None)
+                          and prior.outcome == "pass"), None) if _runtime_cell(cell) else None
         stamp = cell.run.timestamp.astimezone(UTC).date().isoformat()
         slug = f"{stamp}_ollama-{_slug(version)}_{_slug(model)}_{check}"
         if tag and sum(other[:3] == key[:3] for other in cells) > 1:
@@ -279,6 +277,10 @@ def _e(value):
     return html.escape(str(value))
 
 
+def _runtime_cell(cell):
+    return cell.record["check_id"] != "B6" or cell.record.get("attribution") == "runtime"
+
+
 def _cell_html(cell, older, draft, output, *, group):
     group_attr = ' class="group"' if group else ""
     if cell is None:
@@ -293,8 +295,10 @@ def _cell_html(cell, older, draft, output, *, group):
             if (status := attempt.get("outcome")) in OUTCOMES
         )
         content += f'<span class="attempts">{dots}</span>'
-    if older is not None and older.outcome == "pass" and outcome != "pass":
+    if older is not None and older.outcome == "pass" and outcome != "pass" and _runtime_cell(cell):
         content += '<span class="regression">Regression</span>'
+    if cell.record["check_id"] == "B6" and cell.record.get("attribution") == "harness":
+        content += '<span class="harness-failure">Harness failure</span>'
     if reason := cell.record.get("reason"):
         content += f"<small>{_e(reason)}</small>"
     if draft is not None:

@@ -231,11 +231,18 @@ def _run(runtime, releases, names, checks, tags, reports):
     return exit_code
 
 
-def _run_with_isolation(runtime, releases, names, checks, output, tags):
-    before = isolation.snapshot()
+def _releases(runtime, spec, checks, hermes, *, dry_run=False):
+    options = {"fetch": fetch_url, "cache_root": runtime.root, "read_only": dry_run}
+    releases = ollama_releases(spec, asset_name=runtime.settings.asset_name, **options)
+    tags = hermes_tags(hermes, **options) if "B6" in checks else []
+    return releases, tags
+
+
+def _run_with_isolation(runtime, spec, names, checks, output, hermes, before):
     identifier = results.run_id()
     reports = []
     try:
+        releases, tags = _releases(runtime, spec, checks, hermes)
         exit_code = _run(runtime, releases, names, checks, tags, reports)
     finally:
         audit = isolation.compare(before, isolation.snapshot())
@@ -258,6 +265,7 @@ def _run_with_isolation(runtime, releases, names, checks, output, tags):
 
 def run(spec, names, checks, settings, *, hermes=None, dry_run=False):
     try:
+        before = None if dry_run else isolation.snapshot()
         aliases = {model_key(name) for name in names}
         derived = {model_key(derived_name(name)) for name in names}
         if len(aliases) != len(names) or len(derived) != len(names) or aliases & derived:
@@ -265,15 +273,14 @@ def run(spec, names, checks, settings, *, hermes=None, dry_run=False):
 
         runtime = OllamaRuntime(canary_home(), settings, fetch=fetch_url)
         output = safe_path(runtime.root, Path(settings.results_dir))
-        releases = ollama_releases(spec, asset_name=settings.asset_name, fetch=fetch_url)
-        tags = hermes_tags(hermes, fetch=fetch_url) if "B6" in checks else []
         if dry_run:
+            releases, tags = _releases(runtime, spec, checks, hermes, dry_run=True)
             _dry_run(runtime, releases, names)
             if tags:
                 print(f"Hermes releases for B6: {', '.join(tags)}")
             return 0
         with runtime.exclusive():
-            return _run_with_isolation(runtime, releases, names, checks, output, tags)
+            return _run_with_isolation(runtime, spec, names, checks, output, hermes, before)
     except INFRA_ERRORS as error:
         print(f"canary: {error}", file=sys.stderr)
         return 2

@@ -95,11 +95,19 @@ a problem. If Ollama still holds the configured port after the shutdown
 grace period, the runner reports `stop_failed` or preserves the original
 failure with a shutdown note.
 
-Managed runs compare read-only fingerprints of the existing Ollama store and
-its loopback API, plus the existing Hermes configuration and service metadata.
-A file or API change is reported as `isolation_violated` and gives exit code 2.
-Launchd and listener changes are warnings. Hermes configuration and `.env`
-are compared by SHA-256.
+Managed runs take a read-only baseline before release resolution and compare it
+with a final snapshot after cleanup. The audit covers the existing Ollama store
+and its loopback API, Hermes configuration, and service metadata. File or API
+changes, added or removed launchd labels, and changes under
+`~/Library/LaunchAgents/*.plist` are reported as `isolation_violated` with
+exit code 2. PID changes for existing jobs and listener changes are warnings.
+Hermes configuration and `.env` are compared by SHA-256. The config diff also
+lists changed YAML mapping keys without their values.
+
+Managed runs cache GitHub release listings for 60 minutes under
+`CANARY_HOME/release-cache`. Requests use `GITHUB_TOKEN` when set and fall back
+to `gh auth token` when available. Dry runs can reuse a fresh listing and leave
+the cache untouched.
 
 ## Live smoke test (macOS)
 
@@ -116,12 +124,12 @@ and the five Layer A outcomes.
 
 ## Hermes Layer B
 
-Add `--hermes latest` to include B6. Use `last:N` or a stable tag such as
-`v0.23.1` to select specific Hermes releases. Layer A and B6 run by default
+Add `--hermes v0.23.2` to include B6 on macOS. The selectors `latest` and
+`last:N` also resolve stable Hermes releases. Layer A and B6 run by default
 with this option. Use `--checks B6` to run just the harness check.
 
 ```sh
-canary run --ollama last:1 --hermes latest --models llama3.2:3b --checks A1,A2,A3,A4,A5,B6
+canary run --ollama last:1 --hermes v0.23.2 --models llama3.2:3b --checks A1,A2,A3,A4,A5,B6
 ```
 
 The managed installer syncs a tagged Hermes checkout into a dedicated
@@ -130,6 +138,19 @@ reads the required Python minor from `.python-version` or the Hermes PM lock,
 then verifies an interpreter from the parent PATH. If needed, uv installs
 that minor inside `CANARY_HOME/uv-python`. The install uses the interpreter's
 absolute path and records the exact version in the harness metadata.
+
+On macOS, Canary starts `hermes gateway run --force` as a foreground child
+for each B6 attempt. Each attempt has an isolated profile and host lock
+directory. Chat attaches to the foreground child's discovered endpoint via
+Hermes' explicit client path. If the child exits, chat cannot autostart a
+replacement or register a launchd job. Canary sets `HERMES_REAL_HOME` to its
+own `HOME`, outside the profile's special `home` directory, so Hermes'
+subprocess home resolver keeps the isolated path.
+
+The JSON records `gateway_mode: foreground` for the audited v0.23.2 commit.
+Other macOS releases get B6 `error` with reason `harness_requires_launchd`
+until their launch path is verified. The foreground path requires a canary
+home short enough to keep the Unix control socket inside it.
 
 For Hermes v0.23.2, the B6 one-shot gateway accepts the following options
 when advertised by the installed command's help. Canary uses the absolute
@@ -146,13 +167,18 @@ The gateway's [v0.23.2 option validation](https://github.com/NousResearch/hermes
 rejects `--run-budget`. Canary enforces its own deadline and cleanup. A CLI
 rejection before the first proxied request is `error` with reason
 `harness_cli_rejected` and attribution `canary`. Other failures before the
-first request retain harness attribution and record `before_first_request`.
+first request are `error` with harness attribution and the note
+`before_first_request`. A gateway that never reaches Ollama reports
+`harness_not_started`.
 
 B6 uses an isolated home, a fresh work directory, and a recording loopback proxy
 forwarding to managed Ollama. It verifies the exact file content and checks
-for a `write_file` event when Hermes supports stream JSON. Failed attempts
-report whether the recorded upstream responses were broken. Cleanup targets
-the launched process group and canary-owned process paths.
+for a `write_file` event when Hermes supports stream JSON. Attribution is
+computed for non-pass attempts. A non-2xx or malformed chat completion,
+including an SSE stream missing `[DONE]`, is attributed to the runtime.
+Probe responses such as `GET /api/v1/models` returning 404 are informational.
+The proxy records exception details for upstream errors and client disconnects.
+Cleanup targets the launched process group and canary-owned process paths.
 
 ## Compatibility report and repro drafts
 
@@ -165,8 +191,9 @@ The default reads results from `$CANARY_HOME/results` and the repository's
 `results/` directory. Open `report/index.html` in a browser. Rows are Ollama
 versions, newest first. The newest managed run determines which models are
 shown. Use `--all-models` to include historical models. Each model has A1–A5
-columns and one B6 column per Hermes tag. The dots show the recorded attempts. A regression marks a cell
-that passed on the next older Ollama version and now has another outcome.
+columns and one B6 column per Hermes tag. The dots show the recorded attempts.
+A regression marks an A-check or runtime-attributed B6 result that passed on
+the next older Ollama version. Harness failures have a separate marker.
 The matrix keeps the newest actual result per cell and fills gaps with any
 recorded infrastructure error.
 

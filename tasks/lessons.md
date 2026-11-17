@@ -5,3 +5,5 @@ Verify a candidate model's capabilities with `/api/show` on the target machine b
 On macOS, `killpg` can return EPERM instead of ESRCH (e.g. a group of only zombies); treat both as 'gone' and verify shutdown by the port, not by signals. Never let cleanup errors mask the original exception.
 
 An option listed in `--help` is not proof it is accepted in every mode. Classify our own invocation errors (usage exit codes, zero upstream requests) as `error`, never as an upstream failure with a repro.
+
+Isolating HOME/HERMES_HOME does not isolate launchd: anything that registers launchd jobs touches the user's GUI domain. Take the isolation baseline before any install or probe.

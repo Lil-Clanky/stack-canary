@@ -5,7 +5,7 @@ from threading import Event
 import pytest
 
 from fake_ollama import Handler, running
-from stack_canary.proxy import RecordingProxy
+from stack_canary.proxy import RecordingProxy, _Handler, broken_completion
 
 
 def _client(proxy):
@@ -69,3 +69,68 @@ def test_proxy_records_missing_sse_done():
         finally:
             client.close()
     assert proxy.exchanges[0]["error"] == "no_done"
+    assert broken_completion(proxy.exchanges[0])
+
+
+@pytest.mark.parametrize(("content_type", "body", "code"), [
+    ("application/json", b"{malformed", "bad_json"),
+    ("text/event-stream", b"data: {malformed\n\ndata: [DONE]\n\n", "bad_sse"),
+])
+def test_proxy_records_malformed_completion(monkeypatch, content_type, body, code):
+    def reply(handler):
+        handler.send_response(200)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+
+    monkeypatch.setattr(Handler, "do_POST", reply)
+    with running() as upstream, RecordingProxy(upstream.endpoint) as proxy:
+        client = _client(proxy)
+        try:
+            client.request("POST", "/v1/chat/completions?trace=1")
+            assert client.getresponse().read() == body
+        finally:
+            client.close()
+    exchange, = proxy.exchanges
+    assert exchange["error"] == code and broken_completion(exchange)
+
+
+def test_proxy_records_upstream_exception_with_detail(monkeypatch):
+    def disconnect(handler):
+        handler.close_connection = True
+
+    monkeypatch.setattr(Handler, "do_POST", disconnect)
+    with running() as upstream, RecordingProxy(upstream.endpoint) as proxy:
+        client = _client(proxy)
+        try:
+            client.request("POST", "/v1/chat/completions")
+            assert client.getresponse().status == 502
+        finally:
+            client.close()
+    exchange, = proxy.exchanges
+    assert exchange["error"] == "upstream_error"
+    assert exchange["upstream_error"]["type"] == "RemoteDisconnected"
+    assert exchange["upstream_error"]["message"]
+    assert exchange["response"]["status"] is None
+    assert not broken_completion(exchange)
+
+
+def test_proxy_distinguishes_client_disconnect_from_no_done(monkeypatch):
+    def disconnect(*_):
+        raise BrokenPipeError("simulated client disconnect")
+
+    monkeypatch.setattr(_Handler, "end_headers", disconnect)
+    with running("no_done") as upstream, RecordingProxy(upstream.endpoint) as proxy:
+        client = _client(proxy)
+        try:
+            client.request("POST", "/v1/chat/completions", b'{"model":"a","stream":true}')
+            with pytest.raises(http.client.RemoteDisconnected):
+                client.getresponse()
+        finally:
+            client.close()
+    exchange, = proxy.exchanges
+    assert exchange["error"] == "client_disconnect"
+    assert exchange["client_disconnect"] == {"type": "BrokenPipeError", "message": "simulated client disconnect"}
+    assert "upstream_error" not in exchange
+    assert not broken_completion(exchange)

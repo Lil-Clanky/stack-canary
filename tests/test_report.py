@@ -171,3 +171,39 @@ def test_historical_cli_rejection_is_not_an_upstream_failure(home):
     assert check["attempts"][0]["attribution"] == "canary"
     assert main(["report"]) == 0
     assert not list(Path("repro").glob("*.md"))
+
+
+def test_b6_report_distinguishes_runtime_harness_and_startup(home):
+    directory = home / "results"
+    for index, name in enumerate(("runtime", "harness", "draining")):
+        _record(directory, f"20261115T12000{index}Z", "0.40.15",
+                [_check("B6", "pass")], model_name=name)
+
+    def exchange(path, method, status):
+        return {"request": {"path": path, "method": method, "body": BODY},
+                "response": {"status": status}, "error": "http_error"}
+
+    scenarios = {
+        "runtime": [exchange("/v1/chat/completions", "POST", 500)],
+        "harness": [exchange("/api/v1/models", "GET", 404)],
+        "draining": [],
+    }
+    for index, (name, exchanges) in enumerate(scenarios.items()):
+        attempt = {"outcome": "fail", "reason": "file_missing", "attribution": "runtime",
+                   "exit_code": 1, "stderr_tail": ["Error: Gateway draining: not_ready"] if not exchanges else [],
+                   "proxy_exchanges": exchanges}
+        _record(directory, f"20261115T13000{index}Z", "0.40.16",
+                [_check("B6", "fail", attempts=[attempt])], model_name=name)
+    repro_dir = Path("repro")
+    repro_dir.mkdir()
+    stale = repro_dir / "stale-draining.md"
+    stale.write_text(DRAFT_MARKER + "\n", encoding="utf-8")
+    assert main(["report", "--all-models"]) == 0
+    html = Path("report/index.html").read_text(encoding="utf-8")
+    assert html.count('class="regression">Regression') == 1
+    assert html.count('class="harness-failure">Harness failure') == 2
+    assert "harness_not_started" in html
+    assert not stale.exists()
+    assert sorted(path.stem for path in repro_dir.glob("*.md")) == [
+        "2026-11-15_ollama-0.40.16_harness_B6", "2026-11-15_ollama-0.40.16_runtime_B6",
+    ]
