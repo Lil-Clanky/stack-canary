@@ -142,7 +142,7 @@ def test_report_prunes_only_its_stale_drafts(home):
     assert set(directory.iterdir()) == {original, unchanged}
 
 
-def test_report_defaults_to_the_latest_managed_models(home):
+def test_report_defaults_to_the_configured_models(home):
     directory = home / "results"
     _record(directory, "20261115T120000Z", "0.40.15", [_check("A1", "fail")], model_name="tev1:4b")
     _record(directory, "20261116T120000Z", "0.40.16", [_check("A1", "pass")], model_name="llama3.2:3b")
@@ -158,6 +158,11 @@ def test_report_defaults_to_the_latest_managed_models(home):
     html = page.read_text(encoding="utf-8")
     assert "llama3.2:3b" in html and "tev1:4b" not in html and "endpoint-only" not in html
     assert not list(Path("repro").glob("*.md"))
+    # A watch rerun of one configured model keeps the other configured models visible.
+    _record(directory, "20261118T120000Z", "0.40.16", [_check("A1", "pass")], model_name="qwen3.5:0.8b")
+    assert main(["report"]) == 0
+    html = page.read_text(encoding="utf-8")
+    assert "llama3.2:3b" in html and "qwen3.5:0.8b" in html and "tev1:4b" not in html
 
 
 def test_historical_cli_rejection_is_not_an_upstream_failure(home):

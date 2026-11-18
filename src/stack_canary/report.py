@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import quote
 
-from . import __version__, repro
+from . import __version__, config, repro
 from .checks import CHECKS
 from .harness_hermes import b6_summary, classify_attempt
 from .releases import version_key
@@ -412,9 +412,13 @@ def generate(directories=None, output=Path("report/index.html"), repro_dir=Path(
     if all_models:
         names = sorted({name for _, name in models})
     else:
-        latest = next((run for run in reversed(runs) if isinstance(run.data.get("runtime"), dict)), runs[-1])
-        names = sorted({model["name"] for model in latest.data["models"]
-                        if isinstance(model, dict) and isinstance(model.get("name"), str)})
+        # Watch reruns only missing models, so the newest run may hold a subset of the configured set.
+        recorded = {name for _, name in models}
+        names = sorted(name for name in config.load().models if name in recorded)
+        if not names:
+            latest = next((run for run in reversed(runs) if isinstance(run.data.get("runtime"), dict)), runs[-1])
+            names = sorted({model["name"] for model in latest.data["models"]
+                            if isinstance(model, dict) and isinstance(model.get("name"), str)})
         visible = set(names)
         cells = {key: cell for key, cell in cells.items() if key[1] in visible}
     columns = [(check, "") for check in CHECKS] + [

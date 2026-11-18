@@ -253,8 +253,9 @@ canary report --results ~/.stack-canary/results results --out report/index.html 
 
 The default reads results from `$CANARY_HOME/results` and the repository's
 `results/` directory. Open `report/index.html` in a browser. Rows are Ollama
-versions, newest first. The newest managed run determines which models are
-shown. Use `--all-models` to include historical models. Each model has A1–A6
+versions, newest first. The configured `models` are shown, or the models of
+the newest managed run when none of them has results. Use `--all-models` to
+include historical models. Each model has A1–A6
 columns and one B6 column per Hermes tag. The dots show the recorded attempts.
 A regression marks an A-check or runtime-attributed B6 result that fails, is
 flaky or times out after passing on the next older Ollama version. Errors and
