@@ -27,7 +27,7 @@
 
 ## Review
 
-The full Mac mini run on `db2ef84` covered Ollama 0.40.16 and 0.40.15,
+The full Mac mini run on `93ab93a` covered Ollama 0.40.16 and 0.40.15,
 three models, and six checks (A1–A5 and B6). All 108 attempts passed, with
 three attempts per cell. B6 reported `gateway_mode: foreground`.
 
