@@ -133,5 +133,6 @@ or Canary, case-insensitively. It still compares every LaunchAgent plist.
 - [ ] CI on `macos-latest`: 15 managed-runtime tests time out waiting for the
   fake Ollama (`readiness_timeout` after 4 s) although the master server in the
   same test starts. They pass on the local Mac. CI runs on Linux until then.
-- [ ] With approval: make the repository public, publish the matrix and add the
-  end-to-end confirmation to ollama/ollama#19694.
+- [x] Make the repository public and publish the matrix on GitHub Pages
+  (2026-11-18).
+- [ ] With approval: add the end-to-end confirmation to ollama/ollama#19694.
