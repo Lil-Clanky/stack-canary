@@ -6,6 +6,14 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def calm_memory(monkeypatch):
+    # Results must not depend on the host's memory pressure or a model loaded on port 11434.
+    from stack_canary import runtime_ollama
+
+    monkeypatch.setattr(runtime_ollama, "memory_problem", lambda settings, running=False: None)
+
+
+@pytest.fixture(autouse=True)
 def forbid_real_launchctl(monkeypatch):
     original = subprocess.Popen.__init__
 

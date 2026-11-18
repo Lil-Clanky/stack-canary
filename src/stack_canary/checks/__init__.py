@@ -6,4 +6,5 @@ CHECKS = {
     "A3": "Tool call",
     "A4": "Streaming tool call",
     "A5": "Tool result round trip",
+    "A6": "Code in tool arguments",
 }

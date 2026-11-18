@@ -12,7 +12,7 @@ from pathlib import Path
 from . import hermes_registry, isolation, report
 from .harness_hermes import HermesHarness, _install, hermes_tags
 from .releases import ollama_releases, version_key
-from .runtime_ollama import _state_path
+from .runtime_ollama import OllamaError, _state_path
 
 MODEL = "llama3.2:3b"
 
@@ -102,6 +102,8 @@ def _probe(runtime, tag, installed, log):
     with runtime.server(release) as server:
         runtime.warm_up(server.endpoint, model["derived_model"], thinking=False)
         attempt = candidate.attempt(server.endpoint, model["derived_model"], 1)
+        if server.memory_stop:
+            raise OllamaError("memory_pressure", server.memory_stop)
     return {"ollama": version, "outcome": attempt["outcome"], "reason": attempt["reason"],
             "attribution": attempt.get("attribution"), "proxy_requests": len(attempt["proxy_exchanges"]),
             "duration_s": attempt["duration_s"]}

@@ -5,12 +5,35 @@ The project targets Ollama and Hermes Agent so that changes such as broken tool
 calls or hanging streams can be detected and reported by version, model, and
 check. It measures protocol behavior.
 
-## Status v0.1
+## Status
 
-The full Mac mini matrix passed all 108 attempts across Ollama 0.40.16 and
-0.40.15, three models, and checks A1–A5 and B6. Hermes v0.23.2 ran B6 in
-foreground mode. See the [review](tasks/todo.md#review) for isolation evidence,
-runner and GPU measurements, and known limitations.
+On Ollama 0.40.16, the current stable release, check A6 fails 3 of 3 attempts
+for `qwen3.5:0.8b`. The `content` argument `type Box<T=any> = { value: T };`
+comes back as `type Box<T name="any"> = { value: T };`. The same model passes
+the plain tool call (A3), and `llama3.2:3b` and `granite4:3b-h` pass A6 on
+Ollama 0.40.16 and 0.40.15. This matches case 1 of
+[ollama/ollama#19694](https://github.com/ollama/ollama/issues/19694): the
+Qwen 3.5 parser rewrites any `<name=value>` text inside a parameter value. An
+agent that writes TypeScript generics, C++ templates or JSX through this parser
+gets silently altered files.
+
+Earlier, the full Mac mini matrix passed all 108 attempts across Ollama 0.40.16
+and 0.40.15, three models, and checks A1–A5 and B6. Hermes v0.23.2 ran B6 in
+foreground mode. A back-test of `llama3.2:3b` on Ollama 0.8.0 and 0.7.1 passed
+A1–A5. See the [review](tasks/todo.md#review) for isolation evidence, runner and
+GPU measurements, and known limitations.
+
+## Checks
+
+| Check | Request | Passes when |
+| --- | --- | --- |
+| A1 | Chat | The reply contains CANARY and finishes with `stop`. |
+| A2 | Streaming chat | The SSE stream has CANARY, `stop` and `[DONE]`. |
+| A3 | Tool call | A `get_weather` call with Amsterdam and finish reason `tool_calls`, without tool markup in the content. |
+| A4 | Streaming tool call | The same, assembled from streamed deltas. |
+| A5 | Tool result round trip | The answer after the tool result contains 17 and makes no new call. |
+| A6 | Code in tool arguments | A `write_file` call whose `content` is exactly `type Box<T=any> = { value: T };`. |
+| B6 | Hermes Agent | Hermes writes a file with the exact expected content through a recording proxy. |
 
 ## Quick start
 
@@ -71,9 +94,11 @@ The optional `seed_store` setting is unset by default. On macOS, opt in with
 using APFS. The source is read-only. Once a runtime passes archive verification
 and installation, Canary removes the downloaded tarball.
 
-The v0.1 model set is `llama3.2:3b` (Llama-3 JSON template),
-`granite4:3b-h` (Granite tool format), and `qwen3.5:4b`. The first two are
-already in the Mac mini's canary store. The installed `tev1:4b` was dropped
+The model set is `llama3.2:3b` (Llama-3 JSON template),
+`granite4:3b-h` (Granite tool format), and `qwen3.5:0.8b` (Qwen 3.5 parser).
+`qwen3.5:4b` was replaced because loading it raised macOS memory pressure to
+the warning level on the 16 GB Mac mini. The 0.8b model uses the same parser
+and renderer. The installed `tev1:4b` was dropped
 because it reports only `decision` in `/api/show`.
 
 Managed runs write one schema-version-2 JSON file per release under
@@ -83,7 +108,7 @@ log matches, and check attempts. The check cells can be `pass`, `fail`,
 `timeout`, `flaky`, `n/a`, or `error`. Models that require a newer Ollama
 version are `n/a`. When the base model lacks the `tools` capability, all
 its checks are `n/a` with reason `model_lacks_tools` and it skips warm-up.
-The capability check also applies to `qwen3.5:4b`.
+The capability check also applies to `qwen3.5:0.8b`.
 Warm-up and GPU errors, including zero GPU offload, produce `error` cells
 and a `model_error` with HTTP status and up to 2 KiB of response body when
 available. The runner checks `/api/version` and moves to the next model
@@ -116,14 +141,30 @@ Managed runs cache GitHub release listings for 60 minutes under
 to `gh auth token` when available. Dry runs can reuse a fresh listing and leave
 the cache untouched.
 
+## Memory safety
+
+A 16 GB Mac mini reset itself while an earlier version ran B6 with a 64K
+context. Managed runs on macOS now guard memory:
+
+- A server start, model load or check is refused with `memory_pressure` when
+  macOS reports memory pressure at the warning level or higher, when swap use
+  exceeds `max_swap_gb` (default 4), or when the Ollama on port 11434 still
+  has models loaded.
+- While a server runs, a watchdog checks once per second. It kills the server
+  when pressure reaches the critical level or swap exceeds `max_swap_gb`.
+  Attempts cut off this way are discarded, and the cell becomes `error`, never
+  `fail`.
+- Layer A needs little context. Use `--context-length 8192` for runs without
+  B6. B6 requires at least 64000 tokens, the Hermes minimum.
+
 ## Live smoke test (macOS)
 
 From the repository on the Mac mini, preview the plan, then run the newest
 stable release with the v0.1 model set.
 
 ```sh
-canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h,qwen3.5:4b --dry-run
-canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h,qwen3.5:4b
+canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h,qwen3.5:0.8b --dry-run
+canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h,qwen3.5:0.8b --context-length 8192
 ```
 
 Check the versioned JSON file for the Ollama version, nonzero GPU offload,
@@ -203,10 +244,11 @@ canary report --results ~/.stack-canary/results results --out report/index.html 
 The default reads results from `$CANARY_HOME/results` and the repository's
 `results/` directory. Open `report/index.html` in a browser. Rows are Ollama
 versions, newest first. The newest managed run determines which models are
-shown. Use `--all-models` to include historical models. Each model has A1–A5
+shown. Use `--all-models` to include historical models. Each model has A1–A6
 columns and one B6 column per Hermes tag. The dots show the recorded attempts.
-A regression marks an A-check or runtime-attributed B6 result that passed on
-the next older Ollama version. Harness failures have a separate marker.
+A regression marks an A-check or runtime-attributed B6 result that fails, is
+flaky or times out after passing on the next older Ollama version. Errors and
+`n/a` are never regressions. Harness failures have a separate marker.
 The matrix keeps the newest actual result per cell and fills gaps with any
 recorded infrastructure error.
 
@@ -221,9 +263,10 @@ directories. Both output directories are Git-ignored.
 ## Scheduling
 
 `canary watch` uses the managed run lock and checks the newest two stable
-Ollama releases by default. It runs A1–A5 and B6 for each release without a
-complete set of results for the configured models and pinned Hermes tag.
-A1–A5 and B6 can come from separate eligible files: watch uses the report's
+Ollama releases by default. For each release without a complete set of
+results for the configured models and pinned Hermes tag, it runs only the
+missing checks. A newly added check therefore runs alone and does not repeat
+B6. Results can come from separate eligible files: watch uses the report's
 cell merge. On macOS, watch verifies a newly discovered latest stable Hermes
 tag and runs a separate B6 column for a verified newer tag. A failed probe
 appears in the summary. Use `canary watch --dry-run` to preview the plan

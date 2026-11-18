@@ -55,12 +55,14 @@ def _run(args: argparse.Namespace) -> int:
     try:
         settings = config.load()
         overrides = {
-            key: getattr(args, key) for key in ("repeats", "results_dir")
+            key: getattr(args, key) for key in ("repeats", "results_dir", "context_length")
             if getattr(args, key) is not None
         }
         settings = replace(settings, **overrides)
         if settings.repeats < 1:
             raise ValueError("repeats must be a positive integer")
+        if settings.context_length < 1:
+            raise ValueError("context_length must be a positive integer")
         if not settings.results_dir:
             raise ValueError("results_dir must be a nonempty path")
         if args.hermes and args.ollama is None:
@@ -72,6 +74,8 @@ def _run(args: argparse.Namespace) -> int:
             raise ValueError(f"unknown checks: {', '.join(unknown)}")
         if "B6" in checks and not args.hermes:
             raise ValueError("B6 requires --hermes")
+        if "B6" in checks and settings.context_length < 64_000:
+            raise ValueError("B6 needs context_length of at least 64000, the Hermes minimum")
 
         if args.ollama is not None:
             return managed.run(args.ollama, args.models, checks, settings,
@@ -137,9 +141,11 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--ollama", help="last:N or a comma-separated list of Ollama versions")
     run.add_argument("--hermes", help="latest, last:N or a Hermes release tag")
     run.add_argument("--models", required=True, type=_csv, help="comma-separated model names")
-    run.add_argument("--checks", type=_csv, help="comma-separated check IDs (default: A1–A5)")
+    run.add_argument("--checks", type=_csv, help="comma-separated check IDs (default: A1–A6)")
     run.add_argument("--repeats", type=int, help="attempts per model and check (default: 3)")
     run.add_argument("--results-dir", help="output directory (default: results)")
+    run.add_argument("--context-length", type=int,
+                     help="managed Ollama context; Layer A needs far less than the B6 default of 65536")
     run.add_argument("--dry-run", action="store_true", help="show the managed plan without writing state")
     reporting = commands.add_parser("report", help="generate a compatibility report and repro drafts")
     reporting.add_argument("--results", action="extend", nargs="+", type=Path, metavar="DIR")

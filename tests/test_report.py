@@ -207,3 +207,12 @@ def test_b6_report_distinguishes_runtime_harness_and_startup(home):
     assert sorted(path.stem for path in repro_dir.glob("*.md")) == [
         "2026-11-15_ollama-0.40.16_harness_B6", "2026-11-15_ollama-0.40.16_runtime_B6",
     ]
+
+
+def test_error_after_pass_is_not_a_regression(home):
+    _record(home / "results", "20261114T100000Z", "0.40.15", [_check("A1", "pass"), _check("A2", "pass")])
+    _record(home / "results", "20261115T100000Z", "0.40.16", [_check("A1", "error"), _check("A2", "fail")])
+    assert main(["report"]) == 0
+    row = next(line for line in Path("report/MATRIX.md").read_text(encoding="utf-8").splitlines()
+               if line.startswith("| 0.40.16"))
+    assert row.split("|")[2:4] == [" ⚠️ ", " ❌ 🔻 "]

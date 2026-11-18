@@ -50,6 +50,7 @@ def offline(monkeypatch, home):
     monkeypatch.setattr(watch, "_swap_used_bytes", lambda: None)
     tags = [{"tag_name": TAG}]
     calls = []
+    checks_run = []
 
     def fetch(url, *, headers):
         if url == API_URL + "?per_page=50":
@@ -59,10 +60,10 @@ def offline(monkeypatch, home):
 
     def run(runtime, names, checks, output, before, resolve, reports):
         assert names == ("x",)
-        assert checks == report.CHECK_IDS
+        checks_run.append(checks)
         assert (runtime.root / ".run-lock/owner.json").exists()
         releases, requested = resolve()
-        assert requested == [TAG]
+        assert requested == ([TAG] if "B6" in checks else [])
         for release in releases:
             calls.append(release.version)
             data = _result(release.version, fail="A2")
@@ -76,7 +77,7 @@ def offline(monkeypatch, home):
 
     monkeypatch.setattr(managed, "fetch_url", fetch)
     monkeypatch.setattr(managed, "_run_with_isolation", run)
-    return tags, calls
+    return tags, calls, checks_run
 
 
 def test_nothing_new(offline, home, capsys):
@@ -98,6 +99,16 @@ def test_watch_merges_separate_api_and_tagged_b6_files(offline, home, usable_b6)
     _history(home, _result("1.2.2"), a, b)
     assert main(["watch"]) == (0 if usable_b6 else 1)
     assert offline[1] == ([] if usable_b6 else ["1.2.3"])
+    assert offline[2] == ([] if usable_b6 else [("B6",)])
+
+
+def test_watch_runs_only_a_newly_added_check(offline, home):
+    complete, partial = _result("1.2.2"), _result("1.2.3")
+    partial["models"][0]["checks"] = [cell for cell in partial["models"][0]["checks"] if cell["check_id"] != "A6"]
+    _history(home, complete, partial)
+    main(["watch"])
+    assert offline[1] == ["1.2.3"]
+    assert offline[2] == [("A6",)]
 
 
 @pytest.mark.parametrize("previous_error", [False, True])
@@ -121,7 +132,7 @@ def test_new_or_incomplete_ollama_and_summary(offline, home, previous_error):
 
 def test_dry_run_and_unverified_tag_notification_once(offline, home, monkeypatch):
     _history(home, _result("1.2.2"), _result("1.2.3"))
-    tags, calls = offline
+    tags, calls, _ = offline
     tags.append({"tag_name": "v0.23.3"})
     Path("canary.toml").write_text('models = ["x"]\nnotify_command = ["fixture", "--flag"]\n', encoding="utf-8")
     notifications = []

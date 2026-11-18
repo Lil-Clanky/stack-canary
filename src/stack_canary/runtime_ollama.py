@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 from collections import deque
 from contextlib import contextmanager, nullcontext
@@ -301,12 +302,15 @@ class OllamaServer:
         self.stop_s = stop_s
         self.process = None
         self.disk_step = disk_step
+        self.master = master
         self.label = f"Ollama {release.version}" + (" master" if master else "")
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         self.log_path = _state_path(root, Path(f"logs/ollama-{release.version}-{timestamp}.log"))
         self.log_tail = []
         self.log_matches = []
         self.stop_notes = []
+        self.memory_stop = None
+        self._stopping = threading.Event()
 
     def __enter__(self):
         try:
@@ -319,6 +323,8 @@ class OllamaServer:
         return self
 
     def _start(self):
+        if problem := memory_problem(self.settings):
+            raise OllamaError("memory_pressure", f"start {self.label} refused: {problem}")
         _port_free(self.settings.port)
         for key in ("HOME", "TMPDIR", "OLLAMA_MODELS"):
             safe_path(self.root, Path(self.environment[key])).mkdir(parents=True, exist_ok=True)
@@ -334,6 +340,20 @@ class OllamaServer:
                 stdout=log, stderr=subprocess.STDOUT, **process_group,
             )
         self._ready()
+        if sys.platform == "darwin" and not self.master:  # the master store server loads no model
+            threading.Thread(target=self._watch_memory, daemon=True).start()
+
+    def _watch_memory(self):
+        # A 16 GB Mac reset itself under model load; stop Ollama before the host stalls.
+        while True:
+            if problem := memory_problem(self.settings, running=True):
+                self.memory_stop = f"memory watchdog stopped {self.label}: {problem}"
+                self.stop_notes.append(self.memory_stop)
+                print(f"canary: {self.memory_stop}", file=sys.stderr, flush=True)
+                self._signal_group(signal.SIGKILL)
+                return
+            if self._stopping.wait(1):
+                return
 
     def _ready(self):
         deadline = time.monotonic() + self.ready_s
@@ -426,6 +446,7 @@ class OllamaServer:
         return failure
 
     def __exit__(self, error_type, error, traceback):
+        self._stopping.set()
         primary = error
         try:
             with self.disk_step(f"server stop {self.label}"):
@@ -453,6 +474,37 @@ def _swap_used_bytes():
     if match:
         amount, unit = match.groups()
         return round(float(amount) * 1024 ** "BKMGT".index(unit))
+    return None
+
+
+def _pressure_level():
+    """Return macOS kern.memorystatus_vm_pressure_level: 1 normal, 2 warning, 4 critical."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        return int(subprocess.check_output(
+            ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
+            text=True, stderr=subprocess.DEVNULL, timeout=2,
+        ))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def memory_problem(settings, *, running=False):
+    """Say why loading (or, when running, keeping) a model risks the host, else None."""
+    level = _pressure_level()
+    if level is not None and level >= (4 if running else 2):
+        return f"macOS memory pressure level {level}"
+    swap = _swap_used_bytes()
+    if swap is not None and swap > settings.max_swap_gb * 1024 ** 3:
+        return f"swap use {swap / 1024 ** 3:.1f} GiB exceeds max_swap_gb = {settings.max_swap_gb:g}"
+    if not running:
+        from .isolation import _api  # isolation imports schedule, which imports this module
+
+        loaded = (_api("/api/ps") or {}).get("models")
+        if loaded:
+            names = ", ".join(str(item.get("name")) for item in loaded if isinstance(item, dict))
+            return f"the Ollama on port 11434 still has models loaded ({names}); unload them first"
     return None
 
 
@@ -539,6 +591,10 @@ class OllamaRuntime:
                 "disk_space", f"{operation} needs {needed:,} bytes plus {reserve:,} bytes of free "
                 f"space in reserve; {free:,} bytes available",
             )
+
+    def memory_guard(self, operation: str) -> None:
+        if problem := memory_problem(self.settings):
+            raise OllamaError("memory_pressure", f"{operation} refused: {problem}")
 
     def tree(self, release: Release) -> Path:
         version_key(release.version)
@@ -791,6 +847,7 @@ class OllamaRuntime:
             })
 
     def warm_up(self, endpoint, model: str, *, thinking: bool) -> dict:
+        self.memory_guard(f"load {model}")
         body = {
             "model": model, "messages": [{"role": "user", "content": "Hi"}],
             "max_tokens": 1, "stream": False, "temperature": 0, "seed": 42,

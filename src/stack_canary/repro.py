@@ -15,6 +15,7 @@ EXPECTED = {
     "A3": "A get_weather tool call with Amsterdam in its JSON arguments.",
     "A4": "A streamed get_weather tool call with Amsterdam in its JSON arguments and a [DONE] marker.",
     "A5": "A final response containing 17 after the tool result, without a new tool call.",
+    "A6": "A write_file tool call whose content argument is exactly: type Box<T=any> = { value: T };",
     "B6": "Hermes writes the exact expected contents and emits a write_file event when supported.",
 }
 

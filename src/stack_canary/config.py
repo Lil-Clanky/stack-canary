@@ -19,10 +19,11 @@ class Settings:
     context_length: int = 65536
     kv_cache_type: str = "q8_0"
     min_free_gb: float = 5
+    max_swap_gb: float = 4
     allow_full_copy: bool = False
     seed_store: str | None = None
     hermes_deadline_s: float = 300
-    models: tuple[str, ...] = ("llama3.2:3b", "granite4:3b-h", "qwen3.5:4b")
+    models: tuple[str, ...] = ("llama3.2:3b", "granite4:3b-h", "qwen3.5:0.8b")
     watch_versions: int = 2
     hermes_tag: str = "v0.23.2"
     notify_command: tuple[str, ...] | None = None
@@ -70,8 +71,10 @@ def load(path: Path = Path("canary.toml")) -> Settings:
         raise ValueError("context_length must be a positive integer")
     if not isinstance(settings.kv_cache_type, str) or not settings.kv_cache_type.strip():
         raise ValueError("kv_cache_type must be a nonempty string")
-    if type(settings.min_free_gb) not in (int, float) or not 0 <= settings.min_free_gb < float("inf"):
-        raise ValueError("min_free_gb must be finite and nonnegative")
+    for key in ("min_free_gb", "max_swap_gb"):
+        value = getattr(settings, key)
+        if type(value) not in (int, float) or not 0 <= value < float("inf"):
+            raise ValueError(f"{key} must be finite and nonnegative")
     if type(settings.allow_full_copy) is not bool:
         raise ValueError("allow_full_copy must be a boolean")
     if settings.seed_store is not None and (

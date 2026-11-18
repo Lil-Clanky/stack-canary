@@ -20,8 +20,22 @@ WEATHER_TOOL = {
         },
     },
 }
+# Agents write code through tool arguments; `<T=any>` resembles Qwen's <parameter=...> tags (ollama#19694).
+CODE_LINE = "type Box<T=any> = { value: T };"
+WRITE_PROMPT = f"Use the write_file tool to write box.ts with exactly this content: {CODE_LINE}"
+WRITE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "write_file",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+    },
+}
 TOOL_MARKUP = re.compile(
-    r'<tool_call>|\[TOOL_CALLS\]|<\|python_tag\|>|<\|channel\|>|"name"\s*:\s*"get_weather"'
+    r'<tool_call>|\[TOOL_CALLS\]|<\|python_tag\|>|<\|channel\|>|"name"\s*:\s*"(get_weather|write_file)"'
 )
 
 
@@ -40,6 +54,10 @@ def _body(check_id: str, model: str, thinking: bool) -> dict:
             {"role": "system", "content": "You are a test fixture."},
             {"role": "user", "content": CHAT_PROMPT},
         ]
+        return body
+    if check_id == "A6":
+        body["tools"] = [WRITE_TOOL]
+        body["messages"] = [{"role": "user", "content": WRITE_PROMPT}]
         return body
     body["tools"] = [WEATHER_TOOL]
     body["messages"] = [{"role": "user", "content": WEATHER_PROMPT}]
@@ -80,20 +98,23 @@ def _choice(payload: object) -> dict:
     return _first(_object(payload).get("choices"))
 
 
-def _tool_reason(calls: object, content: str, finish: object) -> str | None:
+def _tool_reason(calls: object, content: str, finish: object, *, write: bool = False) -> str | None:
     if TOOL_MARKUP.search(content):
         return "tool_markup_leaked"
     call = _first(calls)
     if not call:
         return "no_tool_call"
     function = _object(call.get("function"))
-    if function.get("name") != "get_weather":
+    if function.get("name") != ("write_file" if write else "get_weather"):
         return "wrong_tool_name"
     try:
-        arguments = parse_json(_text(function.get("arguments")))
+        arguments = _object(parse_json(_text(function.get("arguments"))))
     except (ValueError, RecursionError):
         return "bad_tool_args"
-    if "amsterdam" not in _text(_object(arguments).get("city")).casefold():
+    if write:
+        if _text(arguments.get("content")).strip() != CODE_LINE:
+            return "tool_args_altered"
+    elif "amsterdam" not in _text(arguments.get("city")).casefold():
         return "bad_tool_args"
     if finish != "tool_calls":
         return "wrong_finish_reason"
@@ -143,8 +164,8 @@ def _reason(check_id: str, exchange: Exchange) -> str | None:
     choice = _choice(exchange.payload)
     message = _object(choice.get("message"))
     content = _text(message.get("content"))
-    if check_id == "A3":
-        return _tool_reason(message.get("tool_calls"), content, choice.get("finish_reason"))
+    if check_id in {"A3", "A6"}:
+        return _tool_reason(message.get("tool_calls"), content, choice.get("finish_reason"), write=check_id == "A6")
     if check_id == "A5":
         if message.get("tool_calls"):
             return "unexpected_tool_call"

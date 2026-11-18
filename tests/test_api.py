@@ -165,3 +165,16 @@ def test_a4_assembles_calls_by_index(monkeypatch):
     with running() as server:
         result = attempt("A4", server.endpoint)
     assert (result["outcome"], result["reason"]) == ("pass", None)
+
+
+@pytest.mark.parametrize(("model", "outcome", "reason"), [
+    ("a", "pass", None),
+    ("fake:rewrite_code", "fail", "tool_args_altered"),
+])
+def test_a6_requires_code_arguments_verbatim(model, outcome, reason):
+    with running() as server:
+        result = attempt("A6", server.endpoint, model=model)
+    body = json.loads(result["request"]["body"])
+    assert body["stream"] is False and body["tools"][0]["function"]["name"] == "write_file"
+    assert "type Box<T=any> = { value: T };" in body["messages"][0]["content"]
+    assert (result["outcome"], result["reason"]) == (outcome, reason)

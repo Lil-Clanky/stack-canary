@@ -99,15 +99,20 @@ def _check_model(runtime, server, version, checks, model, tags, harnesses):
             raise OllamaError("cpu_fallback", f"{name}: /api/ps reports zero GPU offload")
     with runtime.disk_step(f"checks {name}"):
         for check_id in checks:
+            runtime.memory_guard(f"{check_id} on {name}")
             if check_id == "B6":
-                model["checks"].extend(
+                records = [
                     {**harness.check(server.endpoint, derived), "harness_tag": harness.tag}
                     for harness in harnesses
-                )
+                ]
             else:
-                model["checks"].extend(run_checks(
+                records = run_checks(
                     server.endpoint, derived, [check_id], runtime.settings, thinking=thinking,
-                ))
+                )
+            # Attempts cut off by the watchdog say nothing about the runtime.
+            if server.memory_stop:
+                raise OllamaError("memory_pressure", server.memory_stop)
+            model["checks"].extend(records)
 
 
 def _confirm_server(runtime, server):
@@ -134,6 +139,10 @@ def _check_version(runtime, release, checks, models, report, harnesses):
                     _mark_checks(model, checks, "error")
                     print(f"Ollama {release.version}, {model['name']}: {error}", file=sys.stderr)
                     _confirm_server(runtime, server)
+    except INFRA_ERRORS as error:
+        if server.memory_stop:
+            raise OllamaError("memory_pressure", server.memory_stop) from error
+        raise
     finally:
         report["log"] = _diagnostics(server)
 

@@ -10,7 +10,7 @@ import socket
 import subprocess
 import sys
 import tarfile
-from contextlib import closing
+from contextlib import closing, nullcontext
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -538,7 +538,7 @@ def test_managed_run_end_to_end(home, settings, monkeypatch, capsys):
         "size": 1024, "size_vram": 768, "offload": 0.75,
         "runner": "fake-runner", "digest": model["derived_digest"],
     }
-    assert [check["check_id"] for check in model["checks"]] == ["A1", "A2", "A3", "A4", "A5"]
+    assert [check["check_id"] for check in model["checks"]] == ["A1", "A2", "A3", "A4", "A5", "A6"]
     for check in model["checks"]:
         assert check["outcome"] == "pass"
         assert len(check["attempts"]) == 3
@@ -646,6 +646,70 @@ def test_swap_used_bytes(platform, usage, expected, monkeypatch):
 
     monkeypatch.setattr(runtime_ollama.subprocess, "check_output", read)
     assert runtime_ollama._swap_used_bytes() == expected
+
+
+REAL_MEMORY_PROBLEM = runtime_ollama.memory_problem
+
+
+@pytest.mark.parametrize(("level", "swap_gib", "loaded", "running", "expected"), [
+    (1, 1, [], False, None),
+    (2, 1, [], False, "pressure level 2"),
+    (2, 1, [], True, None),
+    (4, 1, [], True, "pressure level 4"),
+    (1, 5, [], True, "exceeds max_swap_gb = 4"),
+    (1, 1, [{"name": "llama3.2:3b"}], False, "(llama3.2:3b)"),
+    (1, 1, [{"name": "llama3.2:3b"}], True, None),
+    (None, None, None, False, None),
+])
+def test_memory_problem(level, swap_gib, loaded, running, expected, monkeypatch):
+    monkeypatch.setattr(runtime_ollama, "_pressure_level", lambda: level)
+    monkeypatch.setattr(runtime_ollama, "_swap_used_bytes", lambda: swap_gib and swap_gib * 1024 ** 3)
+    monkeypatch.setattr(managed.isolation, "_api", lambda path: None if loaded is None else {"models": loaded})
+    problem = REAL_MEMORY_PROBLEM(Settings(), running=running)
+    assert problem is None if expected is None else expected in problem
+
+
+def test_memory_pressure_refuses_server_start(home, settings, monkeypatch):
+    managed_fixture(monkeypatch, settings)
+    monkeypatch.setattr(runtime_ollama, "memory_problem", lambda settings, running=False: "fixture pressure")
+    assert main(["run", "--ollama", "last:1", "--models", "x", "--checks", "A1"]) == 2
+    report = read_reports(home)["1.10.0"]
+    assert report["infra_error"]["code"] == "memory_pressure"
+    assert "fixture pressure" in report["infra_error"]["message"]
+    assert not list((home / "logs").glob("*.log"))
+
+
+def test_memory_watchdog_stop_is_error_not_failure(home, settings, monkeypatch):
+    managed_fixture(monkeypatch, settings)
+    monkeypatch.setattr(runtime_ollama, "memory_problem",
+                        lambda settings, running=False: "fixture pressure" if running else None)
+    # Run the watchdog inline so it stops the server before any request.
+    monkeypatch.setattr(runtime_ollama, "threading", SimpleNamespace(
+        Event=runtime_ollama.threading.Event, Thread=lambda target, daemon: SimpleNamespace(start=target),
+    ))
+    monkeypatch.setattr(runtime_ollama, "sys", SimpleNamespace(
+        platform="darwin", stderr=sys.stderr, exc_info=sys.exc_info))
+    assert main(["run", "--ollama", "last:1", "--models", "x", "--checks", "A1,A3"]) == 2
+    report = read_reports(home)["1.10.0"]
+    assert report["infra_error"]["code"] == "memory_pressure"
+    assert "memory watchdog stopped Ollama 1.10.0" in report["log"]["stop_note"]
+    assert not any(check["outcome"] in {"fail", "flaky", "timeout"}
+                   for model in report["models"] for check in model["checks"])
+
+
+def test_watchdog_discards_cut_off_attempts(monkeypatch):
+    model = {"name": "x", "derived_model": "canary-x", "requires": None, "checks": []}
+    runtime = SimpleNamespace(
+        settings=Settings(), disk_step=lambda step: nullcontext(),
+        memory_guard=lambda operation: None, api=lambda *args, **kwargs: {"capabilities": ["tools"]},
+        warm_up=lambda *args, **kwargs: {"offload": 1.0},
+    )
+    server = SimpleNamespace(endpoint="http://127.0.0.1:1", memory_stop="memory watchdog stopped Ollama 1.10.0")
+    monkeypatch.setattr(managed, "run_checks", lambda *args, **kwargs: [{"check_id": "A1", "outcome": "fail"}])
+    with pytest.raises(OllamaError) as raised:
+        managed._check_model(runtime, server, "1.10.0", ["A1"], model, {"x:latest": "a", "canary-x:latest": "b"}, [])
+    assert raised.value.code == "memory_pressure"
+    assert model["checks"] == []
 
 
 def test_requires_newer_version_yields_na(home, settings, monkeypatch):

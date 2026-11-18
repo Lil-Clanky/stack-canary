@@ -38,15 +38,17 @@ def _eligible_history(history):
             and (run.data.get("isolation") or {}).get("status") != "isolation_violated"]
 
 
-def _tested_versions(history, settings):
+def _missing_checks(history, settings):
+    """Map each version with eligible results to the checks it still lacks for some model."""
     eligible = _eligible_history(history)
     cells, _, _ = report.merge(eligible)
     accepted = {"pass", "fail", "flaky", "timeout", "n/a"}
-    return {version for version in {run.version for run in eligible}
-            if all((cell := cells.get((version, model, check,
-                                       settings.hermes_tag if check == "B6" else ""))) is not None
-                   and cell.outcome in accepted and not cell.model.get("model_error")
-                   for model in settings.models for check in report.CHECK_IDS)}
+    return {version: [check for check in report.CHECK_IDS
+                      if not all((cell := cells.get((version, model, check,
+                                                     settings.hermes_tag if check == "B6" else ""))) is not None
+                                 and cell.outcome in accepted and not cell.model.get("model_error")
+                                 for model in settings.models)]
+            for version in {run.version for run in eligible}}
 
 
 def _regressions(history, current, tag):
@@ -66,7 +68,7 @@ def _regressions(history, current, tag):
             for check, cell in _checks(model, _tags(run.data), tag):
                 outcome = cell["outcome"]
                 prior = cells.get((previous_version, model["name"], check, tag if check == "B6" else ""))
-                if (prior is not None and prior.outcome == "pass" and outcome != "pass"
+                if (prior is not None and prior.outcome == "pass" and outcome in report.DRAFT_OUTCOMES
                         and (check != "B6" or cell.get("attribution") == "runtime")):
                     regressions.append({"version": run.version, "previous_version": previous_version,
                                         "model": model["name"], "check": check, "outcome": outcome})
@@ -162,10 +164,13 @@ def _watch(runtime, dry_run):
         managed.validate_models(settings.models)
         before = None if dry_run else isolation.snapshot()
         history = report.load_runs(directories)
-        tested = _tested_versions(history, settings)
+        missing = _missing_checks(history, settings)
         options = {"fetch": managed.fetch_url, "cache_root": root, "read_only": dry_run}
         recent = ollama_releases(f"last:{settings.watch_versions}", asset_name=settings.asset_name, **options)
-        releases = [release for release in recent if release.version not in tested]
+        releases = [release for release in recent if missing.get(release.version, report.CHECK_IDS)]
+        # Rerun only what is missing, so a new check does not repeat the heavy B6 runs.
+        checks = tuple(check for check in report.CHECK_IDS
+                       if any(check in missing.get(release.version, report.CHECK_IDS) for release in releases))
         summary["selected"] = [release.version for release in releases]
         tags = hermes_tags("last:50", **options)
         registry = hermes_registry.load(root)
@@ -211,8 +216,8 @@ def _watch(runtime, dry_run):
         if releases:
             try:
                 code = max(code, managed._run_with_isolation(
-                    runtime, settings.models, report.CHECK_IDS, directory, before,
-                    lambda: (releases, [settings.hermes_tag]), produced,
+                    runtime, settings.models, checks, directory, before,
+                    lambda: (releases, [settings.hermes_tag] if "B6" in checks else []), produced,
                 ))
             finally:
                 _record_reports(summary, produced, history, settings.hermes_tag)

@@ -11,7 +11,7 @@ from threading import Event, Lock, Thread
 
 MODES = (
     "ok", "hang_before_headers", "stall_mid_stream", "slow_drip", "no_done",
-    "single_chunk", "leak_tool_markup", "bad_tool_args", "split_tool_args",
+    "single_chunk", "leak_tool_markup", "bad_tool_args", "split_tool_args", "rewrite_code",
     "http_500", "flaky", "cpu_fallback", "pull_error",
 )
 MODELS = ("a", "b", *(f"fake:{mode}" for mode in MODES))
@@ -221,12 +221,15 @@ def _reply(body: dict, mode: str) -> tuple[dict, str]:
         if mode == "leak_tool_markup":
             message["content"] = '<tool_call>{"name":"get_weather"}</tool_call>'
             return message, "stop"
-        arguments = '{invalid' if mode == "bad_tool_args" else '{"city":"Amsterdam"}'
+        name = body["tools"][0]["function"]["name"]
+        code = 'type Box<T name="any"> = { value: T };' if mode == "rewrite_code" else "type Box<T=any> = { value: T };"
+        arguments = ('{invalid' if mode == "bad_tool_args" else
+                     json.dumps({"path": "box.ts", "content": code}) if name == "write_file" else '{"city":"Amsterdam"}')
         message["content"] = None
         message["tool_calls"] = [{
             "id": "call_fake_1",
             "type": "function",
-            "function": {"name": "get_weather", "arguments": arguments},
+            "function": {"name": name, "arguments": arguments},
         }]
         return message, "tool_calls"
     return message, "stop"

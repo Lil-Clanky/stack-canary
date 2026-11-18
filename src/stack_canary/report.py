@@ -295,7 +295,7 @@ def _cell_html(cell, older, draft, output, *, group):
             if (status := attempt.get("outcome")) in OUTCOMES
         )
         content += f'<span class="attempts">{dots}</span>'
-    if older is not None and older.outcome == "pass" and outcome != "pass" and _runtime_cell(cell):
+    if older is not None and older.outcome == "pass" and outcome in DRAFT_OUTCOMES and _runtime_cell(cell):
         content += '<span class="regression">Regression</span>'
     if cell.record["check_id"] == "B6" and cell.record.get("attribution") == "harness":
         content += '<span class="harness-failure">Harness failure</span>'
@@ -385,7 +385,7 @@ def _markdown(run, versions, names, columns, cells, drafts, output):
                 cell = cells.get((version, name, check, tag))
                 prior = cells.get((older, name, check, tag))
                 marker = EMOJI[cell.outcome] if cell else "—"
-                if cell and prior and prior.outcome == "pass" and cell.outcome != "pass" and _runtime_cell(cell):
+                if cell and prior and prior.outcome == "pass" and cell.outcome in DRAFT_OUTCOMES and _runtime_cell(cell):
                     marker += " 🔻"
                 values.append(marker)
         lines.append(row(values))

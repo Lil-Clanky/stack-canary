@@ -90,3 +90,38 @@ or Canary, case-insensitively. It still compares every LaunchAgent plist.
   covers the merge and rejects B6 evidence from an isolation violation.
 - A new full watch and release check are pending until the Mac is available
   for local model workloads.
+
+## Review 2026-11-18: memory guard and first red cell
+
+- The Mac mini reset itself on 2026-11-17 at 21:58 (`ResetCounter`, boot fault
+  `wdog`) during Canary work with a 64K context. Ollama logs from that evening
+  show `free_swap="0 B"`, swap near 7 GB and free disk falling from 10.4 to
+  7.7 GB. The exact trigger is not proven.
+- Managed runs now refuse a server start, model load or check under macOS
+  memory pressure (warning or worse), above `max_swap_gb` (default 4) or while
+  the Ollama on port 11434 has models loaded. A watchdog kills the server at
+  critical pressure or above `max_swap_gb`. Cut-off attempts become `error`.
+- `--context-length` overrides the context for a run. B6 refuses less than
+  64000 tokens (Hermes `MINIMUM_CONTEXT_LENGTH`).
+- New check A6 sends a `write_file` call whose content is
+  `type Box<T=any> = { value: T };`. On Ollama 0.40.16, `qwen3.5:0.8b` failed
+  3 of 3 attempts with `type Box<T name="any"> = ...` (ollama/ollama#19694,
+  case 1). A3 passed on the same model. `llama3.2:3b` and `granite4:3b-h`
+  passed A6 on 0.40.16 and 0.40.15.
+- `qwen3.5:4b` raised memory pressure to the warning level at load, so the
+  guard refused A6. The default model set now uses `qwen3.5:0.8b`.
+- Back-tests that found nothing: `llama3.2:3b` on Ollama 0.7.1 and 0.8.0 passed
+  A1–A5 (0.7.1 buffers a streamed tool call into one valid chunk). Qwen 3.5 on
+  0.17.5 and 0.17.6 could not be tested: the registry refuses current Qwen 3.5
+  manifests to those versions (HTTP 412).
+- Watch now runs only missing checks, so adding A6 does not repeat B6.
+- Errors and `n/a` no longer count as regressions in the report or summary.
+
+### Open
+
+- [ ] Free disk space: 3.9 GB free on 2026-11-18, below the 5 GB reserve, so
+  every managed run is refused until space is freed.
+- [ ] Run `canary watch` to fill the matrix for `qwen3.5:0.8b` and A6.
+- [ ] Add a second agent harness (pi or opencode) next to Hermes.
+- [ ] With approval: make the repository public, publish the matrix and add the
+  end-to-end confirmation to ollama/ollama#19694.

@@ -33,12 +33,12 @@ def test_run_defaults_and_result_schema(tmp_path, monkeypatch, capsys):
     with running() as server:
         assert main(["run", "--endpoint", server.endpoint, "--models", "a,b"]) == 0
         endpoint = server.endpoint
-        assert server.chat_requests == 30
+        assert server.chat_requests == 36
 
     output = capsys.readouterr().out
-    assert output.splitlines()[0].split() == ["MODEL", "A1", "A2", "A3", "A4", "A5"]
-    assert output.splitlines()[1].split() == ["a", *["pass"] * 5]
-    assert output.splitlines()[2].split() == ["b", *["pass"] * 5]
+    assert output.splitlines()[0].split() == ["MODEL", "A1", "A2", "A3", "A4", "A5", "A6"]
+    assert output.splitlines()[1].split() == ["a", *["pass"] * 6]
+    assert output.splitlines()[2].split() == ["b", *["pass"] * 6]
     [path] = Path("results").glob("*Z_endpoint.json")
     assert str(path) in output
     result = json.loads(path.read_text(encoding="utf-8"))
@@ -48,7 +48,7 @@ def test_run_defaults_and_result_schema(tmp_path, monkeypatch, capsys):
     assert result["endpoint"] == endpoint
     assert result["runtime_version"] == "0.0.0-fake"
     assert result["settings"]["repeats"] == 3
-    assert result["settings"]["checks"] == ["A1", "A2", "A3", "A4", "A5"]
+    assert result["settings"]["checks"] == ["A1", "A2", "A3", "A4", "A5", "A6"]
     for model in result["models"]:
         assert model["digest"].startswith("sha256:")
         for check in model["checks"]:
@@ -122,3 +122,9 @@ def test_results_write_error_is_infrastructure_error(monkeypatch, tmp_path, caps
         args = ["run", "--endpoint", server.endpoint, "--models", "a", "--checks", "A1", "--repeats", "1"]
         assert main(args) == 2
     assert "could not write results" in capsys.readouterr().err
+
+
+def test_b6_refuses_a_context_below_the_hermes_minimum(capsys):
+    args = ["run", "--ollama", "last:1", "--hermes", "v0.23.2", "--models", "x", "--context-length", "8192"]
+    assert main(args) == 2
+    assert "at least 64000" in capsys.readouterr().err
