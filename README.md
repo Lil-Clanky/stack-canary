@@ -14,8 +14,12 @@ macOS-only.
 
 ## Status
 
-On Ollama 0.40.16, the current stable release, check A6 fails 3 of 3 attempts
-for `qwen3.5:0.8b`. The `content` argument `type Box<T=any> = { value: T };`
+The current matrix is published at
+[lil-clanky.github.io/stack-canary](https://lil-clanky.github.io/stack-canary/)
+and as [Markdown](https://github.com/Lil-Clanky/stack-canary/blob/matrix/MATRIX.md).
+
+On Ollama 0.40.16, the current stable release, and on 0.40.15, check A6 fails
+3 of 3 attempts for `qwen3.5:0.8b`. The `content` argument `type Box<T=any> = { value: T };`
 comes back as `type Box<T name="any"> = { value: T };`. The same model passes
 the plain tool call (A3), and `llama3.2:3b` and `granite4:3b-h` pass A6 on
 Ollama 0.40.16 and 0.40.15. This matches case 1 of
