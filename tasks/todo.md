@@ -119,9 +119,16 @@ or Canary, case-insensitively. It still compares every LaunchAgent plist.
 
 ### Open
 
-- [ ] Free disk space: 3.9 GB free on 2026-11-18, below the 5 GB reserve, so
-  every managed run is refused until space is freed.
-- [ ] Run `canary watch` to fill the matrix for `qwen3.5:0.8b` and A6.
+- [x] Free disk space: about 18 GB free later on 2026-11-18.
+- [x] Fill Layer A for `qwen3.5:0.8b`: A1–A5 pass and A6 fails 3/3 on both
+  0.40.16 and 0.40.15 (clean isolation audit on the second run; the first was
+  flagged because the user's own Ollama restarted and dropped a partial pull).
+- [ ] B6 for `qwen3.5:0.8b`: blocked. Hermes v0.23.2 is `unsupported` in the
+  registry. The 2026-11-17 probe passed, but its isolation audit was flagged
+  without a recorded cause (now recorded as `isolation_changes`). The rerun on
+  2026-11-18 hit critical memory pressure with `llama3.2:3b` at 64K, and the
+  watchdog stopped it (now inconclusive instead of `unsupported`). Rerun
+  `canary hermes verify v0.23.2` with heavy apps closed.
 - [ ] Add a second agent harness (pi or opencode) next to Hermes.
 - [ ] With approval: make the repository public, publish the matrix and add the
   end-to-end confirmation to ollama/ollama#19694.

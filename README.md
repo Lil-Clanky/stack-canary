@@ -162,6 +162,10 @@ context. Managed runs on macOS now guard memory:
   `fail`.
 - Layer A needs little context. Use `--context-length 8192` for runs without
   B6. B6 requires at least 64000 tokens, the Hermes minimum.
+- A watchdog stop during `canary hermes verify` is inconclusive and leaves the
+  registry unchanged. On the 16 GB Mac mini, the `llama3.2:3b` probe at 64K
+  reached critical pressure with a browser and other apps open, and the
+  watchdog stopped it. Close heavy apps before B6 runs.
 
 ## Live smoke test (macOS)
 

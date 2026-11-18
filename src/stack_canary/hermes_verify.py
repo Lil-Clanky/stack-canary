@@ -100,10 +100,13 @@ def _probe(runtime, tag, installed, log):
     candidate = HermesHarness(runtime.root, tag, runtime.settings, runtime.guard,
                               installer=lambda *_: installed, probe=log)
     with runtime.server(release) as server:
-        runtime.warm_up(server.endpoint, model["derived_model"], thinking=False)
-        attempt = candidate.attempt(server.endpoint, model["derived_model"], 1)
-        if server.memory_stop:
-            raise OllamaError("memory_pressure", server.memory_stop)
+        try:
+            runtime.warm_up(server.endpoint, model["derived_model"], thinking=False)
+            attempt = candidate.attempt(server.endpoint, model["derived_model"], 1)
+        finally:
+            # A watchdog kill surfaces as a connection error; report the real cause instead.
+            if server.memory_stop:
+                raise OllamaError("memory_pressure", server.memory_stop)
     return {"ollama": version, "outcome": attempt["outcome"], "reason": attempt["reason"],
             "attribution": attempt.get("attribution"), "proxy_requests": len(attempt["proxy_exchanges"]),
             "duration_s": attempt["duration_s"]}
@@ -140,6 +143,8 @@ def verify(runtime, tag):
         else:
             evidence["reason"] = "static_contract_missing"
     except (*INFRA_ERRORS, SyntaxError) as error:
+        if getattr(error, "code", None) == "memory_pressure":
+            raise  # Inconclusive, so keep the previous registry row.
         evidence["reason"] = getattr(error, "code", type(error).__name__)
         print(f"canary: Hermes {tag}: {error}", file=sys.stderr)
     finally:
@@ -151,6 +156,7 @@ def verify(runtime, tag):
         plists = sorted((after.get("launch_agents") or {}).keys() - before["launch_agents"].keys())
         evidence.update(new_labels=labels, new_plists=plists, isolation=audit["status"],
                         isolation_incident=audit["status"] == "isolation_violated",
+                        isolation_changes=sorted(audit["diff"]),
                         shim_empty=not log.exists() or log.stat().st_size == 0,
                         snapshots_complete=valid_snapshot)
         if labels:

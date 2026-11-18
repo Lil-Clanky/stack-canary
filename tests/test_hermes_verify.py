@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from stack_canary import hermes_registry, hermes_verify
+from stack_canary.runtime_ollama import OllamaError
 
 
 def test_static_contract(tmp_path):
@@ -60,6 +61,25 @@ def test_attestation_and_job_cleanup(tmp_path, monkeypatch, new, shim, status):
     runtime = SimpleNamespace(root=tmp_path, guard=lambda op: None, fetch=None)
     row = hermes_verify.verify(runtime, tag)
     assert row["status"] == status and row["evidence"]["shim_empty"] is not shim
+    assert row["evidence"]["isolation_changes"] == (["launchd"] if new else [])
     assert [action for action, _ in calls] == (["print", "bootout"] if new else [])
     assert hermes_registry.verified_commit(tmp_path, tag) == (commit if status == "verified" else None)
     assert not hermes_verify._owned_job(tmp_path, "HERMES_HOME => /Users/someone/.hermes")
+
+
+def test_memory_stop_leaves_the_registry_alone(tmp_path, monkeypatch):
+    tag = "v0.23.3"
+    monkeypatch.setattr(hermes_verify, "available", lambda: True)
+    monkeypatch.setattr(hermes_verify.isolation, "snapshot", lambda: {"launchd": {}, "launch_agents": {}})
+    monkeypatch.setattr(hermes_verify, "hermes_tags", lambda *a, **kw: [tag])
+    monkeypatch.setattr(hermes_verify, "_install", lambda *a: (tmp_path / "venv/bin/hermes", {"commit": "a" * 40}))
+    monkeypatch.setattr(hermes_verify, "static_check", lambda p: {"passed": True})
+
+    def stopped(*args):
+        raise OllamaError("memory_pressure", "memory watchdog stopped Ollama")
+
+    monkeypatch.setattr(hermes_verify, "_probe", stopped)
+    runtime = SimpleNamespace(root=tmp_path, guard=lambda op: None, fetch=None)
+    with pytest.raises(OllamaError, match="watchdog"):
+        hermes_verify.verify(runtime, tag)
+    assert tag not in hermes_registry.load(tmp_path)
