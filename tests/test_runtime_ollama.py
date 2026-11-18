@@ -679,6 +679,7 @@ def test_memory_pressure_refuses_server_start(home, settings, monkeypatch):
     assert not list((home / "logs").glob("*.log"))
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="the watchdog runs only on macOS")
 def test_memory_watchdog_stop_is_error_not_failure(home, settings, monkeypatch):
     managed_fixture(monkeypatch, settings)
     monkeypatch.setattr(runtime_ollama, "memory_problem",
@@ -687,8 +688,6 @@ def test_memory_watchdog_stop_is_error_not_failure(home, settings, monkeypatch):
     monkeypatch.setattr(runtime_ollama, "threading", SimpleNamespace(
         Event=runtime_ollama.threading.Event, Thread=lambda target, daemon: SimpleNamespace(start=target),
     ))
-    monkeypatch.setattr(runtime_ollama, "sys", SimpleNamespace(
-        platform="darwin", stderr=sys.stderr, exc_info=sys.exc_info))
     assert main(["run", "--ollama", "last:1", "--models", "x", "--checks", "A1,A3"]) == 2
     report = read_reports(home)["1.10.0"]
     assert report["infra_error"]["code"] == "memory_pressure"

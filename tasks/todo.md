@@ -130,5 +130,8 @@ or Canary, case-insensitively. It still compares every LaunchAgent plist.
   watchdog stopped it (now inconclusive instead of `unsupported`). Rerun
   `canary hermes verify v0.23.2` with heavy apps closed.
 - [ ] Add a second agent harness (pi or opencode) next to Hermes.
+- [ ] CI on `macos-latest`: 15 managed-runtime tests time out waiting for the
+  fake Ollama (`readiness_timeout` after 4 s) although the master server in the
+  same test starts. They pass on the local Mac. CI runs on Linux until then.
 - [ ] With approval: make the repository public, publish the matrix and add the
   end-to-end confirmation to ollama/ollama#19694.
