@@ -39,15 +39,17 @@ def _eligible_history(history):
 
 
 def _missing_checks(history, settings):
-    """Map each version with eligible results to the checks it still lacks for some model."""
+    """Map each version with eligible results to the checks each model still lacks."""
     eligible = _eligible_history(history)
     cells, _, _ = report.merge(eligible)
     accepted = {"pass", "fail", "flaky", "timeout", "n/a"}
-    return {version: [check for check in report.CHECK_IDS
-                      if not all((cell := cells.get((version, model, check,
-                                                     settings.hermes_tag if check == "B6" else ""))) is not None
-                                 and cell.outcome in accepted and not cell.model.get("model_error")
-                                 for model in settings.models)]
+
+    def done(version, model, check):
+        cell = cells.get((version, model, check, settings.hermes_tag if check == "B6" else ""))
+        return cell is not None and cell.outcome in accepted and not cell.model.get("model_error")
+
+    return {version: {model: [check for check in report.CHECK_IDS if not done(version, model, check)]
+                      for model in settings.models}
             for version in {run.version for run in eligible}}
 
 
@@ -167,10 +169,13 @@ def _watch(runtime, dry_run):
         missing = _missing_checks(history, settings)
         options = {"fetch": managed.fetch_url, "cache_root": root, "read_only": dry_run}
         recent = ollama_releases(f"last:{settings.watch_versions}", asset_name=settings.asset_name, **options)
-        releases = [release for release in recent if missing.get(release.version, report.CHECK_IDS)]
-        # Rerun only what is missing, so a new check does not repeat the heavy B6 runs.
+        everything = {model: report.CHECK_IDS for model in settings.models}
+        gaps = {release.version: missing.get(release.version, everything) for release in recent}
+        releases = [release for release in recent if any(gaps[release.version].values())]
+        # Rerun only what is missing, so a new check or model does not repeat the heavy B6 runs.
+        models = tuple(model for model in settings.models if any(gap[model] for gap in gaps.values()))
         checks = tuple(check for check in report.CHECK_IDS
-                       if any(check in missing.get(release.version, report.CHECK_IDS) for release in releases))
+                       if any(check in lacking for gap in gaps.values() for lacking in gap.values()))
         summary["selected"] = [release.version for release in releases]
         tags = hermes_tags("last:50", **options)
         registry = hermes_registry.load(root)
@@ -216,7 +221,7 @@ def _watch(runtime, dry_run):
         if releases:
             try:
                 code = max(code, managed._run_with_isolation(
-                    runtime, settings.models, checks, directory, before,
+                    runtime, models, checks, directory, before,
                     lambda: (releases, [settings.hermes_tag] if "B6" in checks else []), produced,
                 ))
             finally:

@@ -102,8 +102,12 @@ def test_watch_merges_separate_api_and_tagged_b6_files(offline, home, usable_b6)
     assert offline[2] == ([] if usable_b6 else [("B6",)])
 
 
-def test_watch_runs_only_a_newly_added_check(offline, home):
+def test_watch_runs_only_missing_checks_and_models(offline, home):
+    Path("canary.toml").write_text('models = ["x", "y"]\n', encoding="utf-8")
     complete, partial = _result("1.2.2"), _result("1.2.3")
+    for data in (complete, partial):
+        data["models"].append({**data["models"][0], "name": "y"})
+    # Only x lacks A6, so the fake runner's names == ("x",) assertion also covers model selection.
     partial["models"][0]["checks"] = [cell for cell in partial["models"][0]["checks"] if cell["check_id"] != "A6"]
     _history(home, complete, partial)
     main(["watch"])

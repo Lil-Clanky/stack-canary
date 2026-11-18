@@ -34,4 +34,4 @@ notify_on_success = false
 # ntfy_server = "https://ntfy.sh"
 # ntfy_topic = "set-your-private-topic-in-canary.toml"
 # publish_branch = "matrix"
-# publish_gh_user = "Lil-Clanky"
+# publish_gh_user = "your-github-user"

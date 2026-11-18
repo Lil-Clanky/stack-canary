@@ -1,9 +1,16 @@
 # Stack Canary
 
+[![test](https://github.com/Lil-Clanky/stack-canary/actions/workflows/test.yml/badge.svg)](https://github.com/Lil-Clanky/stack-canary/actions/workflows/test.yml)
+
 Stack Canary checks protocol compatibility across releases of local LLM stacks.
-The project targets Ollama and Hermes Agent so that changes such as broken tool
-calls or hanging streams can be detected and reported by version, model, and
-check. It measures protocol behavior.
+Ollama ships often, and each release can change how a model's tool calls are
+parsed. An agent built on top then breaks without an error: a tool call turns
+into plain text, a stream never ends, or a file argument arrives altered.
+Stack Canary runs the same small checks against every Ollama release, for
+each model, and records the result per version, model and check. It measures
+protocol behavior, not answer quality. It needs Python 3.11 or newer and has
+no runtime dependencies. Managed Ollama runs and the Hermes check are
+macOS-only.
 
 ## Status
 
@@ -98,8 +105,7 @@ The model set is `llama3.2:3b` (Llama-3 JSON template),
 `granite4:3b-h` (Granite tool format), and `qwen3.5:0.8b` (Qwen 3.5 parser).
 `qwen3.5:4b` was replaced because loading it raised macOS memory pressure to
 the warning level on the 16 GB Mac mini. The 0.8b model uses the same parser
-and renderer. The installed `tev1:4b` was dropped
-because it reports only `decision` in `/api/show`.
+and renderer.
 
 Managed runs write one schema-version-2 JSON file per release under
 `$CANARY_HOME/results`. A relative `--results-dir` is relative to `CANARY_HOME`.
@@ -160,7 +166,7 @@ context. Managed runs on macOS now guard memory:
 ## Live smoke test (macOS)
 
 From the repository on the Mac mini, preview the plan, then run the newest
-stable release with the v0.1 model set.
+stable release with the default model set.
 
 ```sh
 canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h,qwen3.5:0.8b --dry-run
@@ -168,7 +174,7 @@ canary run --ollama last:1 --models llama3.2:3b,granite4:3b-h,qwen3.5:0.8b --con
 ```
 
 Check the versioned JSON file for the Ollama version, nonzero GPU offload,
-and the five Layer A outcomes.
+and the six Layer A outcomes.
 
 ## Hermes Layer B
 
@@ -265,8 +271,8 @@ directories. Both output directories are Git-ignored.
 `canary watch` uses the managed run lock and checks the newest two stable
 Ollama releases by default. For each release without a complete set of
 results for the configured models and pinned Hermes tag, it runs only the
-missing checks. A newly added check therefore runs alone and does not repeat
-B6. Results can come from separate eligible files: watch uses the report's
+models and checks that are missing. A newly added check or model therefore
+runs alone and does not repeat B6 for the others. Results can come from separate eligible files: watch uses the report's
 cell merge. On macOS, watch verifies a newly discovered latest stable Hermes
 tag and runs a separate B6 column for a verified newer tag. A failed probe
 appears in the summary. Use `canary watch --dry-run` to preview the plan
@@ -304,8 +310,8 @@ configured channels. It submits real test notifications.
 output. The Markdown matrix uses one B6 column per Hermes tag, marks
 runtime regressions and links to repro drafts.
 
-Set `publish_branch = "matrix"` and `publish_gh_user = "Lil-Clanky"` to
-enable publishing to the private Stack Canary repository. Run
+Set `publish_branch = "matrix"` and `publish_gh_user` to your GitHub account
+to enable publishing to the `matrix` branch of your repository. Run
 `canary publish` manually, or let watch publish when configured. The
 publisher uses an orphan worktree at `CANARY_HOME/publish` and pushes only
 the matrix ref. It allows only the two matrix formats, the two summaries
