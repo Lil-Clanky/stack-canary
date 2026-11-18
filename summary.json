@@ -1,27 +1,26 @@
 {
-  "timestamp": "20261117T193907.860542Z",
+  "timestamp": "20261118T033003.392033Z",
   "models": [
     "llama3.2:3b",
     "granite4:3b-h",
     "qwen3.5:4b"
   ],
   "hermes_tag": "v0.23.2",
-  "selected": [
-    "0.40.16",
-    "0.40.15"
-  ],
-  "ran": [
-    "0.40.16",
-    "0.40.15"
-  ],
+  "selected": [],
+  "ran": [],
   "regressions": [],
-  "infra_errors": [],
+  "infra_errors": [
+    {
+      "message": "Publish: publish credential is unavailable for the configured GitHub user"
+    }
+  ],
   "isolation_errors": [],
   "unverified_hermes": [],
   "new_unverified_hermes": [],
-  "lowest_free_bytes": 7759814656,
-  "peak_swap_used_bytes": 6967001088,
-  "duration_s": 1352.5726872500964,
-  "exit_code": 0,
-  "status": "pass"
+  "failed_hermes": [],
+  "lowest_free_bytes": 1161601024,
+  "peak_swap_used_bytes": 4301321667,
+  "duration_s": 2.7451078749982116,
+  "exit_code": 2,
+  "status": "error"
 }

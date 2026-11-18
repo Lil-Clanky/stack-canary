@@ -1,11 +1,12 @@
-# Stack Canary watch — pass
+# Stack Canary watch — error
 
-- Selected: 0.40.16, 0.40.15
-- Ran: 0.40.16, 0.40.15
+- Selected: none
+- Ran: none
 - Unverified Hermes: none
-- Lowest free disk (bytes): 7759814656
-- Peak swap (bytes): 6967001088
-- Duration (seconds): 1352.57
+- Failed Hermes verification: none
+- Lowest free disk (bytes): 1161601024
+- Peak swap (bytes): 4301321667
+- Duration (seconds): 2.75
 
 ## Regressions
 
@@ -13,7 +14,7 @@
 
 ## Infrastructure errors
 
-- None
+- Watch: Publish: publish credential is unavailable for the configured GitHub user
 
 ## Isolation errors
 
