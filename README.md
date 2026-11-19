@@ -1,138 +1,109 @@
 <p align="center">
-  <a href="https://lil-clanky.github.io/stack-canary/"><img src="assets/banner.svg" width="100%" alt="Stack Canary: catch the Ollama release that breaks your agent's tool calls"></a>
+  <a href="https://lil-clanky.github.io/stack-canary/"><img src="assets/banner.svg" width="100%" alt="Stack Canary: every Ollama release, tested before your agent meets it"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Lil-Clanky/stack-canary/actions/workflows/test.yml"><img src="https://github.com/Lil-Clanky/stack-canary/actions/workflows/test.yml/badge.svg" alt="Test status"></a>
+  <a href="https://github.com/Lil-Clanky/stack-canary/actions/workflows/test.yml"><img src="https://github.com/Lil-Clanky/stack-canary/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
   <a href="https://lil-clanky.github.io/stack-canary/"><img src="https://img.shields.io/badge/matrix-live-facc15?labelColor=0b1120" alt="Live matrix"></a>
-  <img src="https://img.shields.io/badge/python-3.11%2B-60a5fa?labelColor=0b1120" alt="Python 3.11 or newer">
-  <img src="https://img.shields.io/badge/runtime%20dependencies-none-4ade80?labelColor=0b1120" alt="No runtime dependencies">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-94a3b8?labelColor=0b1120" alt="MIT license"></a>
 </p>
 
-Ollama ships often, and each release can change how a model's tool calls are
-parsed. An agent built on top then breaks without an error: a tool call turns
-into plain text, a stream never ends, or a file argument arrives altered.
-
-**Stack Canary runs the same small checks against every Ollama release, for
-each model, and records the result per version, model and check.** It measures
-protocol behavior, not answer quality.
-
-## The matrix today
-
-<p align="center">
-  <a href="https://lil-clanky.github.io/stack-canary/"><img src="https://raw.githubusercontent.com/Lil-Clanky/stack-canary/matrix/matrix.svg" alt="The current compatibility matrix: one row per Ollama version and model, one column per check"></a>
-</p>
-
-The image shows the latest published run. The
-[live page](https://lil-clanky.github.io/stack-canary/) adds the attempts,
-the reasons and a repro draft for each failing cell. There is also a
-[Markdown version](https://github.com/Lil-Clanky/stack-canary/blob/matrix/MATRIX.md).
-
-## What it caught
-
-On Ollama 0.40.16, the current stable release, and on 0.40.15, check A6 fails
-3 of 3 attempts for `qwen3.5:0.8b`. The model is asked to write a file with one
-line of TypeScript. The tool call comes back well formed, but the `content`
-argument is altered:
+Ask `qwen3.5:0.8b` on Ollama 0.40.16 to save one line of TypeScript through a
+tool call, and this is what arrives in the file:
 
 ```diff
 - type Box<T=any> = { value: T };
 + type Box<T name="any"> = { value: T };
 ```
 
-The same model passes the plain tool call (A3), and `llama3.2:3b` and
-`granite4:3b-h` pass A6 on both versions. This matches case 1 of
-[ollama/ollama#19694](https://github.com/ollama/ollama/issues/19694): the
-Qwen 3.5 parser rewrites any `<name=value>` text inside a parameter value. An
-agent that writes TypeScript generics, C++ templates or JSX through this parser
-gets silently altered files.
+Nothing fails. The tool call is well formed, `finish_reason` is `tool_calls`,
+and the code is wrong. The Qwen 3.5 parser reads `<T=any>` as a tag with an
+attribute and rewrites it ([ollama/ollama#19694](https://github.com/ollama/ollama/issues/19694)).
+An agent that writes generics, C++ templates or JSX through it saves broken
+files and never finds out.
 
-Earlier, the full Mac mini matrix passed all 108 attempts across Ollama 0.40.16
-and 0.40.15, three models, and checks A1–A5 and B6. Hermes v0.23.2 ran B6 in
-foreground mode. A back-test of `llama3.2:3b` on Ollama 0.8.0 and 0.7.1 passed
-A1–A5. See the [review](tasks/todo.md#review) for isolation evidence, runner and
-GPU measurements, and known limitations.
+Bugs like this sit between the model and your agent: in the chat template,
+the tool-call parser, the stream. Any Ollama release can change them, and your
+agent's own tests will not notice. Stack Canary installs each new release next to your own
+Ollama, sends every model the same seven checks, and keeps the exact request
+and response. When a release changes the result, you get a red cell and a
+`curl` command that replays it.
 
-## How it works
+## Latest run
 
 <p align="center">
-  <img src="assets/how-it-works.svg" width="100%" alt="Five steps: a new Ollama release, an isolated runtime, the protocol checks, a recorded result, and the matrix with a repro draft. A memory guard and an isolation audit run around every step.">
+  <a href="https://lil-clanky.github.io/stack-canary/"><img src="https://raw.githubusercontent.com/Lil-Clanky/stack-canary/matrix/matrix.svg" alt="Compatibility matrix of the latest run: one row per Ollama version and model, one column per check"></a>
 </p>
 
-Each release runs on a separate port with its own clone of the model store,
-and an audit checks afterwards that your own Ollama was not touched. Every
-attempt records the exact request and response. A cell that fails, flakes or times out gets a Markdown
-draft with a `curl` command that replays it.
+This image is redrawn after every run. The [live page](https://lil-clanky.github.io/stack-canary/)
+shows each attempt, why it failed, and the repro for every red cell.
 
-## Checks
+## The checks
 
-| Check | Request | Passes when |
+| | Sends | Passes when |
 | --- | --- | --- |
-| A1 | Chat | The reply contains CANARY and finishes with `stop`. |
-| A2 | Streaming chat | The SSE stream has CANARY, `stop` and `[DONE]`. |
-| A3 | Tool call | A `get_weather` call with Amsterdam and finish reason `tool_calls`, without tool markup in the content. |
-| A4 | Streaming tool call | The same, assembled from streamed deltas. |
-| A5 | Tool result round trip | The answer after the tool result contains 17 and makes no new call. |
-| A6 | Code in tool arguments | A `write_file` call whose `content` is exactly `type Box<T=any> = { value: T };`. |
-| B6 | Hermes Agent | Hermes writes a file with the exact expected content through a recording proxy. |
+| A1 | A plain chat message | the reply says CANARY and stops normally |
+| A2 | The same, streamed | the stream says CANARY and ends with `[DONE]` |
+| A3 | A `get_weather` tool | the call comes back as a tool call for Amsterdam, with no tool markup in the text |
+| A4 | The same, streamed | the streamed pieces add up to that call |
+| A5 | A tool result | the model uses it, answers 17, and stops calling tools |
+| A6 | A `write_file` tool | `type Box<T=any> = { value: T };` arrives unchanged |
+| B6 | A real agent, [Hermes](https://github.com/NousResearch/hermes-agent) | the file it writes is exactly right |
 
-## Requirements
+Each check runs three times per model. They test the plumbing, not how smart
+the model is.
 
-Python 3.11 or newer, with no runtime dependencies. Checks against an endpoint
-you start yourself run on any platform. Managed Ollama runs and the Hermes
-check are macOS-only.
+## Try it
 
-## Quick start
-
-Clone the repository, install it, then run the tests.
+You need macOS for the managed runs and Python 3.11 or newer. Stack Canary has
+no dependencies.
 
 ```sh
 git clone https://github.com/Lil-Clanky/stack-canary && cd stack-canary
-python -m pip install -e ".[dev]"
-python -m pytest
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+
+canary run --ollama last:2 --models qwen3.5:0.8b --checks A3,A6 --context-length 8192
+canary report && open report/index.html
 ```
 
-Start the fixture on an ephemeral loopback port.
+This downloads the two newest Ollama releases, pulls the model if you do not
+have it yet, and runs each release on port 11535 with its own copy-on-write
+clone of the model files. Your own Ollama on 11434
+keeps running. Afterwards an audit checks that your Ollama, its models and
+your launch agents are exactly as they were. Add `--dry-run` to see what it
+would download first.
+
+Not on a Mac? Point it at any OpenAI-compatible server you started yourself:
 
 ```sh
-python tests/fake_ollama.py --port 0 --mode ok
+canary run --endpoint http://127.0.0.1:8080 --models qwen3.5:0.8b
 ```
 
-In a second terminal, substitute the URL printed by the fixture.
+To run it every night and test only what is new:
 
 ```sh
-canary run --endpoint http://127.0.0.1:49152 --models a,b
+canary schedule install --at 04:30
 ```
 
-The table shows the outcome of each check. The default is three attempts per
-model and check. Use `--checks A1,A4`, `--repeats 1`, or `--results-dir DIR`
-to change the run. To exercise a failure, use a fault model such as
-`--models fake:flaky --checks A1`. The fixture also accepts fault modes via
-`--mode`. The endpoint must be loopback HTTP on an explicit port other than
-`11434`.
+Add `notify = ["macos"]` to `canary.toml` to hear about it when a cell turns
+red.
 
-Copy `canary.toml.example` to `canary.toml` to configure the default attempt
-count, output directory, deadlines, stall timeout, and thinking-capable
-models. The defaults are a 120-second deadline and a 30-second stall timeout.
-Explicit command-line settings take precedence.
+## Made for a 16 GB Mac
 
-Each run writes a UTC-stamped `results/*_endpoint.json` by default. It records
-model digests from `/api/tags` when available, plus the exact request JSON,
-response body or timestamped SSE lines, and machine-readable reasons for each
-attempt. Exit status is 0 for all pass, 1 for any non-pass check, and 2 for
-an infrastructure or usage error.
+Stack Canary runs on a 16 GB Mac mini that once reset itself while a model ran
+with a 64K context. It now checks memory pressure and swap before it starts
+anything, and a watchdog stops Ollama before the Mac stalls. A run stopped
+that way counts as `error`, never `fail`, so a busy Mac never shows up as an
+Ollama regression.
 
-## Documentation
+## More
 
-| Topic | In the reference |
-| --- | --- |
-| Running real Ollama releases side by side | [Managed Ollama usage](docs/reference.md#managed-ollama-usage) |
-| Why a run can refuse to start on a small Mac | [Memory safety](docs/reference.md#memory-safety) |
-| A first real run on macOS | [Live smoke test](docs/reference.md#live-smoke-test-macos) |
-| The agent check through Hermes | [Hermes Layer B](docs/reference.md#hermes-layer-b) |
-| The HTML report and the repro drafts | [Compatibility report and repro drafts](docs/reference.md#compatibility-report-and-repro-drafts) |
-| Nightly runs, cleanup and notifications | [Scheduling](docs/reference.md#scheduling) |
-| Publishing your own matrix | [Publishing the matrix](docs/reference.md#publishing-the-matrix) |
+- [Reference](docs/reference.md): managed runs, the Hermes check, the report,
+  scheduling, publishing your own matrix.
+- [Project log](tasks/todo.md): what is done, what is open, and the
+  measurements behind it.
+- Working on it: `pip install -e ".[dev]" && pytest` runs the tests against a
+  fake Ollama server, so no models are needed.
 
-See [the project checklist](tasks/todo.md) for planned work.
+MIT license.

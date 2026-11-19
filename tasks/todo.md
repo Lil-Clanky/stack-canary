@@ -137,8 +137,10 @@ or Canary, case-insensitively. It still compares every LaunchAgent plist.
   (2026-11-18).
 - [ ] With approval: add the end-to-end confirmation to ollama/ollama#19694.
 - [x] Redesign the report page, add `matrix.svg`, and rebuild the README
-  around the banner, the live matrix image and the how-it-works diagram. The
-  reference text moved to `docs/reference.md` (2026-11-19).
+  around the banner and the live matrix image. The reference text moved to
+  `docs/reference.md` (2026-11-19). Second pass the same day: the README now
+  opens with the A6 bug, the banner shows no invented data, and the generic
+  how-it-works diagram is gone.
 - [x] The scheduled watch of 2026-11-19 failed twice (fixed 2026-11-19):
   - `Ollama did not become ready in 60s` on 0.40.16 and 0.40.15. On
     2026-11-18 `CANARY_HOME` moved to the `MacOffload` disk image on the T7.
