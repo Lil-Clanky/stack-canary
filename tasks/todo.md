@@ -139,10 +139,17 @@ or Canary, case-insensitively. It still compares every LaunchAgent plist.
 - [x] Redesign the report page, add `matrix.svg`, and rebuild the README
   around the banner, the live matrix image and the how-it-works diagram. The
   reference text moved to `docs/reference.md` (2026-11-19).
-- [ ] The scheduled watch of 2026-11-19 could not start Ollama for the missing
-  B6 cells (`Ollama did not become ready in 60s` on 0.40.16 and 0.40.15), and
-  its publish push failed with git exit 128. A manual `canary publish` later
-  that day worked. Cause not found; the canary home is now on an external
-  volume.
+- [x] The scheduled watch of 2026-11-19 failed twice (fixed 2026-11-19):
+  - `Ollama did not become ready in 60s` on 0.40.16 and 0.40.15. On
+    2026-11-18 `CANARY_HOME` moved to the `MacOffload` disk image on the T7.
+    Gatekeeper then scanned each binary at its first launch from the new path:
+    83 s and about 95 s, past the 60 s readiness timeout. A fresh copy took
+    671 s in a test, with Apple's notarization lookup timing out. The server
+    start now launches the binary with `--help` first and waits up to 30
+    minutes outside the readiness timeout.
+  - The publish push failed with git exit 128. The access point disconnected
+    the Mac at 04:31:24 and 04:32:13, and there was no network route from
+    04:32:23, during the push. Wi-Fi dropped 144 times in that hour. The push
+    is now retried twice, 30 s apart.
 - [ ] Upload `assets/social-preview.png` under Settings → Social preview.
   GitHub has no API for it.

@@ -287,6 +287,9 @@ def _clean_environment(overrides):
     return {**inherited, **overrides}
 
 
+LAUNCH_S = 1800
+
+
 class OllamaServer:
     """A single installed server process and its diagnostics."""
 
@@ -323,11 +326,12 @@ class OllamaServer:
         return self
 
     def _start(self):
+        for key in ("HOME", "TMPDIR", "OLLAMA_MODELS"):
+            safe_path(self.root, Path(self.environment[key])).mkdir(parents=True, exist_ok=True)
+        self._launch()  # first, so the memory and port checks below are fresh after a long wait
         if problem := memory_problem(self.settings):
             raise OllamaError("memory_pressure", f"start {self.label} refused: {problem}")
         _port_free(self.settings.port)
-        for key in ("HOME", "TMPDIR", "OLLAMA_MODELS"):
-            safe_path(self.root, Path(self.environment[key])).mkdir(parents=True, exist_ok=True)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         process_group = (
             {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -342,6 +346,24 @@ class OllamaServer:
         self._ready()
         if sys.platform == "darwin" and not self.master:  # the master store server loads no model
             threading.Thread(target=self._watch_memory, daemon=True).start()
+
+    def _launch(self):
+        # Gatekeeper holds the first launch from a new path for its scan, measured at 11 minutes
+        # on a slow network, so it must not count against the readiness timeout.
+        probe = subprocess.Popen(
+            [self.argv[0], "--help"], cwd=self.environment["HOME"], env=_clean_environment(self.environment),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            probe.wait(min(5, LAUNCH_S))
+        except subprocess.TimeoutExpired:
+            print(f"Waiting for macOS to check {self.label} before its first launch", flush=True)
+            try:
+                probe.wait(LAUNCH_S)
+            except subprocess.TimeoutExpired:
+                probe.kill()
+                probe.wait()
+                raise OllamaError("launch_timeout", f"{self.label} did not launch within {LAUNCH_S:g}s") from None
 
     def _watch_memory(self):
         # A 16 GB Mac reset itself under model load; stop Ollama before the host stalls.

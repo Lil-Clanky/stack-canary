@@ -18,6 +18,15 @@ files use APFS copy-on-write clones. Set `allow_full_copy = true` to explicitly
 permit a full copy on macOS. Other platforms use full copies. The free-space
 reserve defaults to 5 GiB.
 
+Before each server start, Canary runs the binary once with `--help`. On macOS,
+Gatekeeper holds the first launch of a binary from a new path until it has
+checked it, which includes an online notarization lookup. On a slow network
+this took 11 minutes for Ollama 0.40.16 on an external disk. The wait prints
+a line, does not count against the 60-second readiness timeout, and gives up
+after 30 minutes with `launch_timeout`. Gatekeeper keeps its verdict for that
+path, so the next run starts at once. Moving `CANARY_HOME` makes every runtime
+a new path again.
+
 The optional `seed_store` setting is unset by default. On macOS, opt in with
 `seed_store = "~/.ollama/models"` to clone missing files into the master store
 using APFS. The source is read-only. Once a runtime passes archive verification
@@ -248,7 +257,9 @@ the matrix ref. It allows only the three matrix formats, the two summaries
 and generated repro drafts. It shortens macOS user paths and refuses to
 push detected credentials, the ntfy topic or the proxy API key. GitHub
 authentication is scoped to the configured account without changing
-global Git or gh settings.
+global Git or gh settings. A failed push is retried twice, 30 seconds
+apart, because a short network drop is enough to fail it. If all three
+attempts fail, the commit stays in the worktree and the next publish pushes it.
 
 On macOS, run the following from the repository with Canary installed in
 `.venv`. The time is local.

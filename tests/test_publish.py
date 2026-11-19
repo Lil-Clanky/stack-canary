@@ -48,10 +48,13 @@ def test_orphan_publish_only_sanitized_reports(tmp_path, monkeypatch):
     def offline(directory, *argv, **kwargs):
         if "push" in argv:
             pushes.append((argv, kwargs["env"]["GH_TOKEN"]))
+            if len(pushes) == 1:  # The network drops during the first push.
+                raise ValueError("publish git operation failed (exit 128)")
             return SimpleNamespace(returncode=0)
         return original(directory, *argv, **kwargs)
 
     monkeypatch.setattr(publish, "_git", offline)
+    monkeypatch.setattr(publish.time, "sleep", lambda seconds: None)
     runtime = SimpleNamespace(root=root, settings=Settings(publish_branch="matrix", publish_gh_user="Lil-Clanky"))
     assert publish.publish(runtime) == publish.URL
     worktree = root / "publish"
@@ -67,4 +70,4 @@ def test_orphan_publish_only_sanitized_reports(tmp_path, monkeypatch):
     (repo / "report/summary.md").write_text("leak " + API_KEY)
     with pytest.raises(ValueError, match="credential-like"):
         publish.publish(runtime)
-    assert len(pushes) == 2
+    assert len(pushes) == 3

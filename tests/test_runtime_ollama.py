@@ -268,6 +268,21 @@ def test_refuses_an_occupied_port(home, settings):
         assert server.process is None
 
 
+def test_slow_first_launch_waits_outside_readiness(home, settings, tmp_path, monkeypatch, capsys):
+    # Stands in for a binary that Gatekeeper holds at its first launch.
+    held = tmp_path / "held"
+    held.write_text("#!/bin/sh\nsleep 30\n")
+    held.chmod(0o755)
+    monkeypatch.setattr(runtime_ollama, "LAUNCH_S", 0.3)
+    runtime, release = installed_runtime(home, settings, lambda executable: [str(held)])
+    server = runtime.server(release)
+    with pytest.raises(OllamaError, match="did not launch") as failure, server:
+        pytest.fail("held binary started")
+    assert failure.value.code == "launch_timeout"
+    assert "Waiting for macOS to check Ollama 1.10.0" in capsys.readouterr().out
+    assert server.process is None and not server.log_path.exists()
+
+
 def test_readiness_mismatch_stops_server(home, settings):
     runtime, release = installed_runtime(home, settings, partial(fake_argv, version="9.9.9"))
     server = runtime.server(release)

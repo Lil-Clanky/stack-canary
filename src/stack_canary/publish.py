@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from . import report
@@ -13,6 +14,7 @@ from .runtime_ollama import _state_path
 REMOTE = report.REPO + ".git"
 URL = report.REPO + "/tree/matrix"
 ARTIFACTS = {"MATRIX.md", "index.html", "matrix.svg", "summary.md", "summary.json"}
+PUSH_ATTEMPTS = 3
 SECRET = re.compile(
     r"(?:\bgithub_pat_[A-Za-z0-9_]+|\bgh[pousr]_[A-Za-z0-9_]+|\bsk-[A-Za-z0-9_-]{12,}"
     r"|\bxox[baprs]-[A-Za-z0-9-]{10,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"
@@ -131,8 +133,16 @@ def publish(runtime):
         raise ValueError("matrix index does not match the sanitized artifact set")
     if _git(worktree, "remote", "get-url", "--push", "origin").stdout.splitlines() != [REMOTE]:
         raise ValueError("matrix worktree push URL is not approved")
-    _git(worktree, "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
-         "push", "origin", f"HEAD:refs/heads/{settings.publish_branch}",
-         env={**os.environ, "GH_TOKEN": token})
+    for attempt in range(PUSH_ATTEMPTS):
+        try:
+            _git(worktree, "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
+                 "push", "origin", f"HEAD:refs/heads/{settings.publish_branch}",
+                 env={**os.environ, "GH_TOKEN": token})
+            break
+        except ValueError:
+            # The nightly run lost Wi-Fi for about 30 seconds in the middle of a push.
+            if attempt == PUSH_ATTEMPTS - 1:
+                raise
+            time.sleep(30)
     print(f"Published matrix: {URL}")
     return URL
