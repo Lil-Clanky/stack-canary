@@ -1,26 +1,45 @@
 {
-  "timestamp": "20261118T033003.392033Z",
+  "timestamp": "20261119T033003.635947Z",
   "models": [
     "llama3.2:3b",
     "granite4:3b-h",
-    "qwen3.5:4b"
+    "qwen3.5:0.8b"
   ],
   "hermes_tag": "v0.23.2",
-  "selected": [],
-  "ran": [],
+  "selected": [
+    "0.40.16",
+    "0.40.15"
+  ],
+  "ran": [
+    "0.40.16",
+    "0.40.15"
+  ],
   "regressions": [],
   "infra_errors": [
     {
-      "message": "Publish: publish credential is unavailable for the configured GitHub user"
+      "version": "0.40.16",
+      "code": "readiness_timeout",
+      "message": "Ollama did not become ready in 60s",
+      "http_status": null,
+      "body_excerpt": null,
+      "stage": "prepare_master"
+    },
+    {
+      "version": "0.40.15",
+      "code": "readiness_timeout",
+      "message": "Ollama did not become ready in 60s",
+      "http_status": null,
+      "body_excerpt": null,
+      "stage": "prepare_master"
     }
   ],
   "isolation_errors": [],
   "unverified_hermes": [],
   "new_unverified_hermes": [],
   "failed_hermes": [],
-  "lowest_free_bytes": 1161601024,
-  "peak_swap_used_bytes": 4301321667,
-  "duration_s": 2.7451078749982116,
+  "lowest_free_bytes": 251297685504,
+  "peak_swap_used_bytes": 1783627776,
+  "duration_s": 134.55004154201015,
   "exit_code": 2,
   "status": "error"
 }

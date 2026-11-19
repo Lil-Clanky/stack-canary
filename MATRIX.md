@@ -1,6 +1,6 @@
 # Stack Canary compatibility matrix
 
-- Date: 2026-11-18 (UTC)
+- Date: 2026-11-19 (UTC)
 - Hermes: v0.23.2
 - Isolation: pass
 

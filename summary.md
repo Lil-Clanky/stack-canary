@@ -1,12 +1,12 @@
 # Stack Canary watch — error
 
-- Selected: none
-- Ran: none
+- Selected: 0.40.16, 0.40.15
+- Ran: 0.40.16, 0.40.15
 - Unverified Hermes: none
 - Failed Hermes verification: none
-- Lowest free disk (bytes): 1161601024
-- Peak swap (bytes): 4301321667
-- Duration (seconds): 2.75
+- Lowest free disk (bytes): 251297685504
+- Peak swap (bytes): 1783627776
+- Duration (seconds): 134.55
 
 ## Regressions
 
@@ -14,7 +14,8 @@
 
 ## Infrastructure errors
 
-- Watch: Publish: publish credential is unavailable for the configured GitHub user
+- 0.40.16: Ollama did not become ready in 60s
+- 0.40.15: Ollama did not become ready in 60s
 
 ## Isolation errors
 
