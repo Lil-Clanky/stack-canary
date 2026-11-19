@@ -10,9 +10,9 @@ from . import report
 from .harness_hermes import API_KEY
 from .runtime_ollama import _state_path
 
-REMOTE = "https://github.com/Lil-Clanky/stack-canary.git"
-URL = "https://github.com/Lil-Clanky/stack-canary/tree/matrix"
-ARTIFACTS = {"MATRIX.md", "index.html", "summary.md", "summary.json"}
+REMOTE = report.REPO + ".git"
+URL = report.REPO + "/tree/matrix"
+ARTIFACTS = {"MATRIX.md", "index.html", "matrix.svg", "summary.md", "summary.json"}
 SECRET = re.compile(
     r"(?:\bgithub_pat_[A-Za-z0-9_]+|\bgh[pousr]_[A-Za-z0-9_]+|\bsk-[A-Za-z0-9_-]{12,}"
     r"|\bxox[baprs]-[A-Za-z0-9-]{10,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"

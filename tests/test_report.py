@@ -3,6 +3,7 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
@@ -81,7 +82,7 @@ def test_matrix_and_repro_drafts_keep_latest_real_outcomes(home):
                      "Runner llamacpp · GPU 100.0% · Source present", "model_lacks_tools",
                      "Cannot install &lt;fixture&gt;", "B6 v0.23.3"):
         assert fragment in html
-    assert html.index('rowspan="2">0.40.16') < html.index('rowspan="2">0.40.15')
+    assert html.index('rowspan="1">0.40.16') < html.index('rowspan="1">0.40.15')
     for outcome in ("pass", "fail", "flaky", "timeout", "error", "n/a"):
         assert f">{outcome}</li>" in html
     paths = sorted(Path("repro").glob("*.md"))
@@ -91,6 +92,9 @@ def test_matrix_and_repro_drafts_keep_latest_real_outcomes(home):
     assert "Last older Ollama version that passed this cell: 0.40.15" in a2
     assert "ollama pull a" in a2 and "/api/create" in a2 and " -N " in a2
     assert "../repro/2026-11-15_ollama-0.40.16_a_A2.md" in html
+    assert "4 of 7 checks did not pass" in html
+    svg = ElementTree.parse("report/matrix.svg").getroot()
+    assert svg.get("role") == "img" and "0.40.16" in ElementTree.tostring(svg, encoding="unicode")
     b6 = next(path for path in paths if "_B6" in path.name).read_text(encoding="utf-8")
     assert TAG in b6 and "ae2a81c" in b6 and "[redacted]" in b6
     assert "secret-token" not in b6

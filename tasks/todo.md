@@ -136,3 +136,13 @@ or Canary, case-insensitively. It still compares every LaunchAgent plist.
 - [x] Make the repository public and publish the matrix on GitHub Pages
   (2026-11-18).
 - [ ] With approval: add the end-to-end confirmation to ollama/ollama#19694.
+- [x] Redesign the report page, add `matrix.svg`, and rebuild the README
+  around the banner, the live matrix image and the how-it-works diagram. The
+  reference text moved to `docs/reference.md` (2026-11-19).
+- [ ] The scheduled watch of 2026-11-19 could not start Ollama for the missing
+  B6 cells (`Ollama did not become ready in 60s` on 0.40.16 and 0.40.15), and
+  its publish push failed with git exit 128. A manual `canary publish` later
+  that day worked. Cause not found; the canary home is now on an external
+  volume.
+- [ ] Upload `assets/social-preview.png` under Settings → Social preview.
+  GitHub has no API for it.

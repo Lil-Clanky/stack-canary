@@ -20,41 +20,93 @@ from .runtime_ollama import canary_home, safe_path
 OUTCOMES = ("pass", "fail", "flaky", "timeout", "error", "n/a")
 DRAFT_OUTCOMES = {"fail", "flaky", "timeout"}
 CHECK_IDS = (*CHECKS, "B6")
+REPO = "https://github.com/Lil-Clanky/stack-canary"
+NAMES = {**CHECKS, "B6": "Hermes Agent file write"}
+# The canary mark, drawn for a 64 by 64 viewBox.
+BIRD = ('<path fill="#eab308" d="M19 41 4 51l5-15z"/>'
+        '<ellipse fill="#facc15" cx="29" cy="38" rx="17" ry="12.5" transform="rotate(-18 29 38)"/>'
+        '<circle fill="#facc15" cx="42" cy="23" r="10.5"/>'
+        '<path fill="#eab308" d="M16 39c5-8 15-10 23-5-4 8-13 11-23 5z"/>'
+        '<path fill="#f97316" d="m51 18 10 5-10 4z"/><circle fill="#0f172a" cx="45" cy="21" r="2"/>'
+        '<path fill="none" stroke="#f97316" stroke-width="2.5" stroke-linecap="round" d="M27 50v7m8-8v8"/>')
+LOGO = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true">{BIRD}</svg>'
+MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+SVG_COLORS = {"pass": "#4ade80", "fail": "#f87171", "flaky": "#fbbf24", "timeout": "#c084fc",
+              "error": "#fb923c", "n/a": "#64748b"}
+# Stroke icons centered on the origin, so a tile reads without relying on color.
+SVG_ICONS = {"pass": "M-4.5 0l3 3 6-6.5", "fail": "M-3.5-3.5l7 7m0-7l-7 7", "flaky": "M-5 1c2-4 3-4 5 0s3 4 5 0",
+             "timeout": "M0-4.5V0l3 2", "error": "M0-5v5.5m0 3.5v.5", "n/a": "M-4 0h8"}
 STYLE = """
 :root {
   color-scheme: light dark;
-  --bg:#f6f7f9; --panel:#fff; --text:#182333; --muted:#46566a; --line:#c7d0db; --link:#17549a;
+  --bg:#f8fafc; --panel:#fff; --text:#0f172a; --muted:#475569; --line:#dbe2ea; --link:#17549a;
   --pass:#117848; --fail:#b8293d; --flaky:#925500; --timeout:#7638a6; --error:#a33a13; --na:#596879;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg:#141a24; --panel:#1d2634; --text:#edf2fa; --muted:#b6c6d9; --line:#465468; --link:#a5d0ff;
+  :root { --bg:#020617; --panel:#0f172a; --text:#f8fafc; --muted:#a3b1c6; --line:#27344a; --link:#a5d0ff;
           --pass:#82dda7; --fail:#ff9ea8; --flaky:#f9c16d; --timeout:#d8adff; --error:#ffb394; --na:#bfccd9; }
 }
 * { box-sizing:border-box }
-body { margin:0; padding:2rem clamp(1rem, 4vw, 4rem); font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--text) }
-h1 { margin:0 0 .75rem; font-size:2rem; letter-spacing:-.025em }
-summary { cursor:pointer }
-.meta { display:flex; flex-wrap:wrap; gap:.5rem 1.5rem; color:var(--muted); margin:0 0 1rem }
-.meta div { display:flex; gap:.45rem }
-.meta dt,.meta dd { margin:0 }
-.meta dt { font-weight:650; color:var(--text) }
-.scroll { overflow:auto; border:1px solid var(--line); border-radius:.6rem; background:var(--panel) }
-table { border-collapse:collapse; width:100%; text-align:left }
-th,td { padding:.55rem .65rem; border-bottom:1px solid var(--line); white-space:nowrap }
-tbody:last-child tr:last-child td,tbody:last-child th[scope=rowgroup] { border-bottom:0 }
-.group { border-left:1px solid var(--line) }
-.details { color:var(--muted); font-size:.83rem }
-td span { display:block }
-.cell small { display:block; color:var(--muted); white-space:normal; min-width:7rem }
+body { margin:0; font:16px/1.55 system-ui,sans-serif; background:var(--bg); color:var(--text) }
+body::before { content:""; position:absolute; inset:0 0 auto; height:26rem; z-index:-1;
+  background:radial-gradient(var(--line) 1px,transparent 1.5px) 0 0/22px 22px;
+  -webkit-mask-image:linear-gradient(#000,transparent); mask-image:linear-gradient(#000,transparent) }
+header,main,footer { max-width:70rem; margin:0 auto; padding:0 clamp(1rem,4vw,2rem) }
+table,pre,.outcome,.release { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
 a { color:var(--link) }
-.outcome { font-weight:700 }
+a:focus-visible,.scroll:focus-visible { outline:2px solid var(--link); outline-offset:2px }
+header { display:flex; align-items:center; justify-content:space-between; padding-block:1.1rem }
+.brand { display:flex; align-items:center; gap:.6rem; font-weight:700; font-size:1.1rem; color:inherit; text-decoration:none }
+.brand svg { width:2.1rem; height:2.1rem }
+.button { padding:.45rem 1rem; border-radius:.5rem; background:#facc15; color:#0f172a; font-weight:650; text-decoration:none }
+.button:hover { background:#fde047 }
+.eyebrow { margin:2.5rem 0 0; font-size:.78rem; font-weight:650; letter-spacing:.08em; text-transform:uppercase; color:var(--muted) }
+h1 { margin:.4rem 0 .9rem; max-width:18ch; font-size:clamp(2rem,5.5vw,3.2rem); line-height:1.06; letter-spacing:-.03em; text-wrap:balance }
+h2 { margin:2.75rem 0 .8rem; font-size:1.25rem; letter-spacing:-.01em }
+.lede { margin:0; max-width:62ch; font-size:1.1rem; color:var(--muted) }
+.summary,.scroll,.meta,pre { border:1px solid var(--line); border-radius:.9rem; background:var(--panel) }
+.summary { margin-top:2rem; padding:1.25rem 1.4rem }
+.summary .eyebrow { margin:0 }
+.headline { display:flex; flex-wrap:wrap; align-items:end; justify-content:space-between; gap:.5rem 2rem }
+.release { margin:.1rem 0 0; font-size:1.7rem; font-weight:700; letter-spacing:-.02em }
+.verdict { margin:0; font-size:1.1rem; font-weight:700 }
+.legend,.findings { display:flex; flex-wrap:wrap; gap:.5rem; margin:.9rem 0 0; padding:0; list-style:none }
+.findings { flex-direction:column; padding-top:.9rem; border-top:1px solid var(--line) }
+.findings li { display:flex; flex-wrap:wrap; align-items:center; gap:.3rem .7rem }
+.scroll { overflow-x:auto }
+table { border-collapse:collapse; width:100%; text-align:left; font-size:.85rem }
+th,td { padding:.6rem .7rem; border-top:1px solid var(--line); vertical-align:top }
+thead th { border-top:0; vertical-align:bottom; white-space:nowrap }
+thead small,.details,td small { display:block; font:400 .72rem/1.35 system-ui,sans-serif; color:var(--muted); white-space:normal }
+thead small { max-width:6.5rem }
+tbody { border-top:2px solid var(--line) }
+th[scope=rowgroup] { font-size:1rem; white-space:nowrap }
+tbody:first-of-type th[scope=rowgroup]::after { content:"newest"; display:block; width:fit-content; margin-top:.3rem; padding:0 .45rem;
+  border-radius:99px; background:#facc15; color:#0f172a; font:650 .68rem/1.6 system-ui,sans-serif }
+th[scope=row] { white-space:nowrap }
+.details { min-width:15rem; margin-top:.15rem }
+@media (max-width:44rem) { .details { display:none } th,td { padding:.5rem .5rem } }
+tbody tr:hover > td,tbody tr:hover > th[scope=row] { background:color-mix(in srgb,var(--text) 4%,transparent) }
+td > * { display:block; width:fit-content }
+td small { max-width:9rem; margin-top:.25rem; overflow-wrap:anywhere }
+td a { margin-top:.25rem; font-size:.75rem; white-space:nowrap }
+.outcome { display:flex; align-items:center; gap:.3rem; width:fit-content; padding:.05rem .55rem; border-radius:99px;
+  background:color-mix(in srgb,currentColor 13%,transparent); font-size:.78rem; font-weight:700; white-space:nowrap }
+.outcome::before { content:"\\2713" } .outcome.fail::before { content:"\\2715" } .outcome.flaky::before { content:"~" }
+.outcome.timeout::before { content:"\\2026" } .outcome.error::before { content:"!" } .outcome.na::before { content:"\\2013" }
 .pass { color:var(--pass) } .fail { color:var(--fail) } .flaky { color:var(--flaky) }
 .timeout { color:var(--timeout) } .error { color:var(--error) } .na,.empty { color:var(--na) }
-.attempts { margin-top:.15rem; letter-spacing:.14em; line-height:1.15 }
+.attempts { margin:.3rem 0 0 .55rem; font-size:.5rem; letter-spacing:.3em; line-height:1 }
 .attempts span { display:inline }
-.regression { color:var(--fail); font-weight:700; font-size:.78rem }
-.harness-failure { color:var(--timeout); font-weight:700; font-size:.78rem }
-.legend { display:flex; flex-wrap:wrap; gap:.8rem; list-style:none; padding:0 }
+.regression,.harness-failure { margin-top:.3rem; font:700 .68rem/1.4 system-ui,sans-serif; letter-spacing:.05em; text-transform:uppercase }
+.regression { color:var(--fail) }
+.harness-failure { color:var(--timeout) }
+.meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:1rem 1.5rem; margin:0; padding:1.2rem 1.4rem }
+.meta dt { font-size:.72rem; font-weight:650; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) }
+.meta dd { margin:0; font-weight:600; overflow-wrap:anywhere }
+pre { margin:0; padding:1.1rem 1.3rem; overflow-x:auto; font-size:.85rem; line-height:1.7 }
+footer { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.5rem 1.5rem; margin-top:3rem; padding-block:1.4rem 2.5rem;
+  border-top:1px solid var(--line); font-size:.85rem; color:var(--muted) }
 """
 
 
@@ -281,10 +333,22 @@ def _runtime_cell(cell):
     return cell.record["check_id"] != "B6" or cell.record.get("attribution") == "runtime"
 
 
-def _cell_html(cell, older, draft, output, *, group):
-    group_attr = ' class="group"' if group else ""
+def _regressed(cell, older):
+    return (cell is not None and older is not None and older.outcome == "pass"
+            and cell.outcome in DRAFT_OUTCOMES and _runtime_cell(cell))
+
+
+def _draft_link(draft, output):
+    try:
+        href = quote(Path(os.path.relpath(draft, output.parent)).as_posix())
+    except ValueError:
+        href = draft.as_uri()
+    return f'<a href="{_e(href)}">Repro draft</a>'
+
+
+def _cell_html(cell, older, draft, output):
     if cell is None:
-        return f'<td{group_attr}><span class="empty" aria-label="No recorded result">—</span></td>'
+        return '<td><span class="empty" aria-label="No recorded result">—</span></td>'
     outcome = cell.outcome
     content = f'<span class="outcome {_class(outcome)}">{outcome}</span>'
     attempts = cell.record.get("attempts") or []
@@ -295,19 +359,15 @@ def _cell_html(cell, older, draft, output, *, group):
             if (status := attempt.get("outcome")) in OUTCOMES
         )
         content += f'<span class="attempts">{dots}</span>'
-    if older is not None and older.outcome == "pass" and outcome in DRAFT_OUTCOMES and _runtime_cell(cell):
+    if _regressed(cell, older):
         content += '<span class="regression">Regression</span>'
     if cell.record["check_id"] == "B6" and cell.record.get("attribution") == "harness":
         content += '<span class="harness-failure">Harness failure</span>'
     if reason := cell.record.get("reason"):
         content += f"<small>{_e(reason)}</small>"
     if draft is not None:
-        try:
-            href = quote(Path(os.path.relpath(draft, output.parent)).as_posix())
-        except ValueError:
-            href = draft.as_uri()
-        content += f'<a href="{_e(href)}">Repro draft</a>'
-    return f"<td{group_attr}>{content}</td>"
+        content += _draft_link(draft, output)
+    return f"<td>{content}</td>"
 
 
 def _model_details(model):
@@ -339,28 +399,95 @@ def _header(run, harnesses, *, stable_timestamp=False):
                                          for label, value in items.items()) + "</dl>"
 
 
+def _summary(versions, cells, drafts, output):
+    """Answer first: what the newest tested release looks like."""
+    current = {key: cell for key, cell in sorted(cells.items()) if key[0] == versions[0]}
+    counts = {outcome: sum(cell.outcome == outcome for cell in current.values()) for outcome in OUTCOMES}
+    broken = [key for key, cell in current.items() if cell.outcome in DRAFT_OUTCOMES]
+    verdict = (f'<p class="verdict fail">{len(broken)} of {len(current)} checks did not pass</p>' if broken
+               else '<p class="verdict pass">No failing checks</p>')
+    chips = "".join(f'<li class="outcome {_class(outcome)}">{count} {outcome}</li>'
+                    for outcome, count in counts.items() if count)
+    findings = "".join(
+        f'<li><span class="outcome {_class(current[key].outcome)}">{current[key].outcome}</span>'
+        f'<span><b>{_e(key[1])}</b> · {_e(f"{key[2]} {key[3]}".strip())} {_e(NAMES[key[2]])}</span>'
+        f'{_draft_link(drafts[key], output) if key in drafts else ""}</li>' for key in broken)
+    return ('<section class="summary" aria-label="Newest tested release"><div class="headline"><div>'
+            f'<p class="eyebrow">Newest tested release</p><p class="release">Ollama {_e(versions[0])}</p></div>'
+            f'{verdict}</div><ul class="legend">{chips}</ul>'
+            + (f'<ul class="findings">{findings}</ul>' if findings else "") + '</section>')
+
+
+def _tested(version, names, columns, cells):
+    """Leave out models without a result for this version, such as a back-test of one model."""
+    return [name for name in names if any((version, name, *column) in cells for column in columns)]
+
+
 def _matrix(versions, names, columns, cells, models, drafts, output):
-    count = len(columns)
-    title = '<tr><th rowspan="2" scope="col">Ollama</th>' + "".join(
-        f'<th class="group" scope="colgroup" colspan="{count}">{_e(name)}</th>' for name in names
-    ) + "</tr>"
-    labels = "".join(
-        f'<th scope="col"{" class=group" if index == 0 else ""}>{_e(check + (" " + tag if tag else ""))}</th>'
-        for _ in names for index, (check, tag) in enumerate(columns)
-    )
-    rows = []
+    head = "".join(f'<th scope="col">{_e(f"{check} {tag}".strip())}<small>{_e(NAMES[check])}</small></th>'
+                   for check, tag in columns)
+    groups = []
     for index, version in enumerate(versions):
         older = versions[index + 1] if index + 1 < len(versions) else None
-        details = "".join(f'<td class="details group" colspan="{count}">{_model_details(models.get((version, name), {}))}</td>'
-                          for name in names)
-        rows.append(f'<tbody><tr><th scope="rowgroup" rowspan="2">{_e(version)}</th>{details}</tr><tr>')
-        for name in names:
+        rows, tested = [], _tested(version, names, columns, cells)
+        for name in tested:
+            label = "" if rows else f'<th scope="rowgroup" rowspan="{len(tested)}">{_e(version)}</th>'
+            tiles = "".join(_cell_html(cells.get((version, name, check, tag)), cells.get((older, name, check, tag)),
+                                       drafts.get((version, name, check, tag)), output) for check, tag in columns)
+            rows.append(f'<tr>{label}<th scope="row">{_e(name)}<small class="details">'
+                        f'{_model_details(models.get((version, name), {}))}</small></th>{tiles}</tr>')
+        if rows:
+            groups.append(f'<tbody>{"".join(rows)}</tbody>')
+    return ('<div class="scroll" role="region" aria-label="Compatibility matrix" tabindex="0"><table><thead><tr>'
+            f'<th scope="col">Ollama</th><th scope="col">Model</th>{head}</tr></thead>{"".join(groups)}</table></div>')
+
+
+def _svg(run, versions, names, columns, cells):
+    """Render the matrix as one dark card, for embedding where HTML is not allowed."""
+    left = 126 + 8 * max(map(len, names), default=0)
+    width = max(left + 60 * len(columns) + 20, 560)
+    parts = []
+    for index, (check, tag) in enumerate(columns):
+        x = left + 60 * index + 24
+        parts.append(f'<text x="{x}" y="76" text-anchor="middle" font-weight="700">{_e(check)}</text>')
+        if tag:
+            parts.append(f'<text x="{x}" y="90" text-anchor="middle" font-size="9" fill="#94a3b8">{_e(tag)}</text>')
+    y = 104
+    for index, version in enumerate(versions):
+        older = versions[index + 1] if index + 1 < len(versions) else None
+        tested = _tested(version, names, columns, cells)
+        if not tested:
+            continue
+        parts.append(f'<path stroke="#1e293b" d="M24 {y}H{width - 24}"/>'
+                     f'<text x="28" y="{y + 29}" font-size="13" font-weight="700">{_e(version)}</text>')
+        y += 12
+        for name in tested:
+            parts.append(f'<text x="110" y="{y + 16}" fill="#cbd5e1">{_e(name)}</text>')
             for offset, (check, tag) in enumerate(columns):
-                key = (version, name, check, tag)
-                rows.append(_cell_html(cells.get(key), cells.get((older, name, check, tag)),
-                                       drafts.get(key), output, group=offset == 0))
-        rows.append("</tr></tbody>")
-    return f'<div class="scroll"><table><thead>{title}<tr>{labels}</tr></thead>{"".join(rows)}</table></div>'
+                cell, x = cells.get((version, name, check, tag)), left + 60 * offset
+                if cell is None:
+                    parts.append(f'<rect x="{x}" y="{y}" width="48" height="24" rx="6" fill="#131c31"/>')
+                    continue
+                outline = ' stroke="#f8fafc" stroke-width="2"' if _regressed(cell, cells.get((older, name, check, tag))) else ""
+                parts.append(f'<rect x="{x}" y="{y}" width="48" height="24" rx="6" fill="{SVG_COLORS[cell.outcome]}"{outline}/>'
+                             f'<path class="i" transform="translate({x + 24} {y + 12})" d="{SVG_ICONS[cell.outcome]}"/>')
+            y += 32
+        y += 4
+    x = 28
+    for outcome in OUTCOMES:
+        parts.append(f'<rect x="{x}" y="{y + 10}" width="14" height="14" rx="4" fill="{SVG_COLORS[outcome]}"/>'
+                     f'<text x="{x + 20}" y="{y + 21}" font-size="11" fill="#94a3b8">{outcome}</text>')
+        x += 38 + 7 * len(outcome)
+    date = run.timestamp.astimezone(UTC).date().isoformat()
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{y + 44}" viewBox="0 0 {width} {y + 44}" '
+            f'role="img" font-family="{MONO}" font-size="12" fill="#f8fafc">'
+            f'<title>Stack Canary compatibility matrix, {date}</title>'
+            f'<rect x=".5" y=".5" width="{width - 1}" height="{y + 43}" rx="14" fill="#0b1120" stroke="#1e293b"/>'
+            f'<g transform="translate(24 16) scale(.45)">{BIRD}</g>'
+            '<text x="62" y="38" font-family="system-ui,sans-serif" font-size="15" font-weight="700">Stack Canary</text>'
+            f'<text x="{width - 28}" y="38" text-anchor="end" font-size="11" fill="#94a3b8">Ollama compatibility · {date}</text>'
+            '<style>.i{fill:none;stroke:#0b1120;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}</style>'
+            + "".join(parts) + '</svg>\n')
 
 
 EMOJI = {"pass": "✅", "fail": "❌", "flaky": "🟡", "timeout": "⏱️", "error": "⚠️", "n/a": "➖"}
@@ -385,7 +512,7 @@ def _markdown(run, versions, names, columns, cells, drafts, output):
                 cell = cells.get((version, name, check, tag))
                 prior = cells.get((older, name, check, tag))
                 marker = EMOJI[cell.outcome] if cell else "—"
-                if cell and prior and prior.outcome == "pass" and cell.outcome in DRAFT_OUTCOMES and _runtime_cell(cell):
+                if _regressed(cell, prior):
                     marker += " 🔻"
                 values.append(marker)
         lines.append(row(values))
@@ -428,13 +555,31 @@ def generate(directories=None, output=Path("report/index.html"), repro_dir=Path(
     legend = '<ul class="legend" aria-label="Outcome legend">' + "".join(
         f'<li class="outcome {_class(outcome)}">{outcome}</li>' for outcome in OUTCOMES
     ) + '</ul>'
-    matrix = _matrix(versions, names, columns, cells, models, drafts, output)
+    title = "Stack Canary compatibility report"
+    lede = ("The same small protocol checks, replayed against every Ollama release for each model. "
+            "A red cell means an agent built on that combination breaks without an error.")
     page = ('<!doctype html>\n<html lang="en"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f'<title>Stack Canary compatibility report</title><style>{STYLE}</style>'
-            f'<main><h1>Stack Canary compatibility report</h1>{_header(runs[-1], harnesses, stable_timestamp=stable_timestamp)}{matrix}{legend}</main></html>\n')
+            f'<title>{title}</title><meta name="description" content="{lede}">'
+            f'<meta property="og:title" content="{title}"><meta property="og:description" content="{lede}">'
+            f'<meta property="og:image" content="{REPO.replace("github.com", "raw.githubusercontent.com")}'
+            '/main/assets/social-preview.png"><meta name="twitter:card" content="summary_large_image">'
+            f'<link rel="icon" href="data:image/svg+xml,{quote(LOGO)}"><style>{STYLE}</style>'
+            f'<header><a class="brand" href="{REPO}">{LOGO}Stack Canary</a>'
+            f'<a class="button" href="{REPO}">GitHub</a></header>'
+            '<main><p class="eyebrow">Compatibility report</p><h1>Tool-call compatibility across Ollama releases</h1>'
+            f'<p class="lede">{lede}</p>{_summary(versions, cells, drafts, output)}'
+            f'<h2>Matrix</h2>{_matrix(versions, names, columns, cells, models, drafts, output)}{legend}'
+            f'<h2>Test bench</h2>{_header(runs[-1], harnesses, stable_timestamp=stable_timestamp)}'
+            '<h2>Run it yourself</h2><pre>git clone ' + REPO + ' &amp;&amp; cd stack-canary\n'
+            'python -m pip install -e .\n'
+            'canary run --ollama last:2 --models llama3.2:3b --context-length 8192  # managed runs need macOS\n'
+            'canary report</pre></main>'
+            f'<footer><span>Generated by Stack Canary {_e(__version__)}. It measures protocol behavior, not answer quality.</span>'
+            f'<a href="{REPO}#checks">What the checks send</a></footer></html>\n')
     _write(output, report_scope, page)
     if output.name == "index.html":
         markdown = output.with_name("MATRIX.md")
         _write(markdown, report_scope, _markdown(runs[-1], versions, names, columns, cells, drafts, markdown))
+        _write(output.with_name("matrix.svg"), report_scope, _svg(runs[-1], versions, names, columns, cells))
     return output, len(drafts)
