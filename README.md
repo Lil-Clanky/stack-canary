@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://lil-clanky.github.io/stack-canary/"><img src="assets/banner.svg" width="100%" alt="Stack Canary: every Ollama release, tested before your agent meets it"></a>
+  <a href="https://lil-clanky.github.io/stack-canary/"><img src="assets/banner.svg" width="100%" alt="Stack Canary"></a>
 </p>
 
 <p align="center">
@@ -8,26 +8,29 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-94a3b8?labelColor=0b1120" alt="MIT license"></a>
 </p>
 
-Ask `qwen3.5:0.8b` on Ollama 0.40.16 to save one line of TypeScript through a
-tool call, and this is what arrives in the file:
+Stack Canary runs the same tool-call checks against each Ollama release, for the
+models you use. It shows which release changed a result and writes a `curl`
+command that reproduces it.
 
-```diff
-- type Box<T=any> = { value: T };
-+ type Box<T name="any"> = { value: T };
+## Example
+
+[ollama/ollama#19694](https://github.com/ollama/ollama/issues/19694) is the kind
+of bug it finds. On Ollama 0.40.16, `qwen3.5:0.8b` is asked to call a
+`write_file` tool with this line:
+
+```ts
+type Box<T=any> = { value: T };
 ```
 
-Nothing fails. The tool call is well formed, `finish_reason` is `tool_calls`,
-and the code is wrong. The Qwen 3.5 parser reads `<T=any>` as a tag with an
-attribute and rewrites it ([ollama/ollama#19694](https://github.com/ollama/ollama/issues/19694)).
-An agent that writes generics, C++ templates or JSX through it saves broken
-files and never finds out.
+The tool call that comes back contains this instead:
 
-Bugs like this sit between the model and your agent: in the chat template,
-the tool-call parser, the stream. Any Ollama release can change them, and your
-agent's own tests will not notice. Stack Canary installs each new release next to your own
-Ollama, sends every model the same seven checks, and keeps the exact request
-and response. When a release changes the result, you get a red cell and a
-`curl` command that replays it.
+```ts
+type Box<T name="any"> = { value: T };
+```
+
+There is no error and `finish_reason` is `tool_calls`, so an agent would write
+the changed line to disk. Ollama's Qwen 3.5 parser reads `<T=any>` as an XML tag
+with an attribute. Check A6 tests for this.
 
 ## Latest run
 
@@ -35,10 +38,10 @@ and response. When a release changes the result, you get a red cell and a
   <a href="https://lil-clanky.github.io/stack-canary/"><img src="https://raw.githubusercontent.com/Lil-Clanky/stack-canary/matrix/matrix.svg" alt="Compatibility matrix of the latest run: one row per Ollama version and model, one column per check"></a>
 </p>
 
-This image is redrawn after every run. The [live page](https://lil-clanky.github.io/stack-canary/)
-shows each attempt, why it failed, and the repro for every red cell.
+The image is updated after each run. The [live page](https://lil-clanky.github.io/stack-canary/)
+has the details of every attempt and the repro commands.
 
-## The checks
+## Checks
 
 | | Sends | Passes when |
 | --- | --- | --- |
@@ -48,15 +51,14 @@ shows each attempt, why it failed, and the repro for every red cell.
 | A4 | The same, streamed | the streamed pieces add up to that call |
 | A5 | A tool result | the model uses it, answers 17, and stops calling tools |
 | A6 | A `write_file` tool | `type Box<T=any> = { value: T };` arrives unchanged |
-| B6 | A real agent, [Hermes](https://github.com/NousResearch/hermes-agent) | the file it writes is exactly right |
+| B6 | A real agent, [Hermes](https://github.com/NousResearch/hermes-agent) | the file it writes has exactly the right content |
 
-Each check runs three times per model. They test the plumbing, not how smart
-the model is.
+Each check runs three times per model.
 
-## Try it
+## Usage
 
-You need macOS for the managed runs and Python 3.11 or newer. Stack Canary has
-no dependencies.
+Managed runs need macOS and Python 3.11 or newer. There are no other
+dependencies.
 
 ```sh
 git clone https://github.com/Lil-Clanky/stack-canary && cd stack-canary
@@ -67,43 +69,47 @@ canary run --ollama last:2 --models qwen3.5:0.8b --checks A3,A6 --context-length
 canary report && open report/index.html
 ```
 
-This downloads the two newest Ollama releases, pulls the model if you do not
-have it yet, and runs each release on port 11535 with its own copy-on-write
-clone of the model files. Your own Ollama on 11434
-keeps running. Afterwards an audit checks that your Ollama, its models and
-your launch agents are exactly as they were. Add `--dry-run` to see what it
-would download first.
+This downloads the two latest Ollama releases and pulls the model if you don't
+have it yet. Each release runs on port 11535 with its own copy-on-write clone of
+the model files, so your own Ollama on port 11434 keeps running. After the run,
+an audit checks that your Ollama, its models and your launch agents are
+unchanged. Add `--dry-run` to see what it would download first.
 
-Not on a Mac? Point it at any OpenAI-compatible server you started yourself:
+You can also test a server you started yourself, as long as it has an
+OpenAI-compatible API:
 
 ```sh
 canary run --endpoint http://127.0.0.1:8080 --models qwen3.5:0.8b
 ```
 
-To run it every night and test only what is new:
+To run it every night and only test what hasn't been tested yet:
 
 ```sh
 canary schedule install --at 04:30
 ```
 
-Add `notify = ["macos"]` to `canary.toml` to hear about it when a cell turns
-red.
+Set `notify = ["macos"]` in `canary.toml` to get a notification when a check
+starts failing.
 
-## Made for a 16 GB Mac
+## Memory
 
-Stack Canary runs on a 16 GB Mac mini that once reset itself while a model ran
-with a 64K context. It now checks memory pressure and swap before it starts
-anything, and a watchdog stops Ollama before the Mac stalls. A run stopped
-that way counts as `error`, never `fail`, so a busy Mac never shows up as an
+I run this on a Mac mini with 16 GB. It reset once during a run with a 64K
+context, so Stack Canary now checks memory pressure and swap before it starts
+Ollama or loads a model. During a run, a watchdog stops Ollama if memory
+pressure becomes critical or swap grows past the limit. Attempts stopped this
+way are reported as `error` instead of `fail`, so they don't show up as an
 Ollama regression.
 
-## More
+## Docs
 
-- [Reference](docs/reference.md): managed runs, the Hermes check, the report,
-  scheduling, publishing your own matrix.
-- [Project log](tasks/todo.md): what is done, what is open, and the
-  measurements behind it.
-- Working on it: `pip install -e ".[dev]" && pytest` runs the tests against a
-  fake Ollama server, so no models are needed.
+- [docs/reference.md](docs/reference.md) covers managed runs, the Hermes check,
+  the report, scheduling and publishing your own matrix.
+- [tasks/todo.md](tasks/todo.md) is the project log, with open issues and the
+  measurements behind them.
 
-MIT license.
+To run the tests: `pip install -e ".[dev]" && pytest`. They use a fake Ollama
+server, so you don't need any models.
+
+## License
+
+MIT

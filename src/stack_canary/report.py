@@ -556,8 +556,7 @@ def generate(directories=None, output=Path("report/index.html"), repro_dir=Path(
         f'<li class="outcome {_class(outcome)}">{outcome}</li>' for outcome in OUTCOMES
     ) + '</ul>'
     title = "Stack Canary compatibility report"
-    lede = ("Every model gets the same seven checks on every Ollama release. "
-            "A red cell is a change an agent would not notice: no error, just a different result.")
+    lede = "Each model runs the same seven tool-call checks on every Ollama release, three attempts per check."
     page = ('<!doctype html>\n<html lang="en"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<title>{title}</title><meta name="description" content="{lede}">'
@@ -567,7 +566,7 @@ def generate(directories=None, output=Path("report/index.html"), repro_dir=Path(
             f'<link rel="icon" href="data:image/svg+xml,{quote(LOGO)}"><style>{STYLE}</style>'
             f'<header><a class="brand" href="{REPO}">{LOGO}Stack Canary</a>'
             f'<a class="button" href="{REPO}">GitHub</a></header>'
-            '<main><p class="eyebrow">Compatibility report</p><h1>Which Ollama release breaks your agent?</h1>'
+            '<main><p class="eyebrow">Compatibility report</p><h1>Tool calls across Ollama releases</h1>'
             f'<p class="lede">{lede}</p>{_summary(versions, cells, drafts, output)}'
             f'<h2>Matrix</h2>{_matrix(versions, names, columns, cells, models, drafts, output)}{legend}'
             f'<h2>Test bench</h2>{_header(runs[-1], harnesses, stable_timestamp=stable_timestamp)}'
