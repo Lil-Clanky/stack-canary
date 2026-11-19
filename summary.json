@@ -31,6 +31,9 @@
       "http_status": null,
       "body_excerpt": null,
       "stage": "prepare_master"
+    },
+    {
+      "message": "Publish: publish git operation failed (exit 128)"
     }
   ],
   "isolation_errors": [],

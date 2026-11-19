@@ -16,6 +16,7 @@
 
 - 0.40.16: Ollama did not become ready in 60s
 - 0.40.15: Ollama did not become ready in 60s
+- Watch: Publish: publish git operation failed (exit 128)
 
 ## Isolation errors
 
