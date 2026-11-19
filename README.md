@@ -82,6 +82,11 @@ OpenAI-compatible API:
 canary run --endpoint http://127.0.0.1:8080 --models qwen3.5:0.8b
 ```
 
+For a server that only speaks the OpenAI API, use `--openai-endpoint` with a
+loopback base URL ending in `/v1`. The models come from `/v1/models` unless you
+pass `--model`, and `--api-key-env NAME` sends a Bearer key read from the
+environment. See [docs/reference.md](docs/reference.md#your-own-server).
+
 To run it every night and only test what hasn't been tested yet:
 
 ```sh

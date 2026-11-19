@@ -158,6 +158,7 @@ def request(
     sse: bool = False,
     ndjson: bool = False,
     on_line: Callable[[object], None] | None = None,
+    secret_headers: dict[str, str] | None = None,
 ) -> Exchange:
     """Retain the response entity or timestamped SSE/NDJSON lines."""
     if sse and ndjson or on_line is not None and not ndjson:
@@ -181,6 +182,7 @@ def request(
     elif method.upper() in {"POST", "PUT", "PATCH"}:
         headers["Content-Length"] = "0"
     exchange = Exchange(
+        # Secret headers go on the wire but stay out of the recorded request.
         request={
             "method": method,
             "url": url,
@@ -196,7 +198,7 @@ def request(
     try:
         connection = _TimedConnection(port, deadline, stall_s)
         connection.connect()
-        connection.request(method, target, body=encoded, headers=headers)
+        connection.request(method, target, body=encoded, headers={**headers, **(secret_headers or {})})
 
         response = connection.getresponse()
         exchange.response.status = response.status

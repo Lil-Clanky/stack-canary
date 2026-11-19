@@ -1,6 +1,8 @@
 """Command-line interface for Stack Canary."""
 
 import argparse
+import json
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -19,16 +21,32 @@ def _csv(value: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(terms))
 
 
-def _get(endpoint: str, path: str, settings: config.Settings) -> dict:
+def _get(endpoint: str, path: str, settings: config.Settings, secret_headers: dict | None = None) -> dict:
     exchange = request(
         "GET", endpoint + path, None,
-        deadline_s=settings.deadline_s, stall_s=settings.stall_s,
+        deadline_s=settings.deadline_s, stall_s=settings.stall_s, secret_headers=secret_headers,
     )
     if exchange.error:
         raise ValueError(f"{path}: {exchange.error}")
     if not isinstance(exchange.payload, dict):
         raise ValueError(f"{path}: expected a JSON object")
     return exchange.payload
+
+
+def _openai_root(url: str) -> str:
+    """Return the server root of a loopback OpenAI-compatible base URL that ends in /v1."""
+    _, target = loopback_url(url)
+    if target.rstrip("/") != "/v1":
+        raise ValueError("the OpenAI endpoint must be a base URL ending in /v1, with no query")
+    return url.rstrip("/").removesuffix("/v1")
+
+
+def _summary_rows(models: list[dict]) -> list[dict]:
+    status = {"pass": "pass", "error": "error"}
+    return [{"model": model["name"], "check": check["check_id"], "status": status.get(check["outcome"], "fail"),
+             "passed": sum(attempt["outcome"] == "pass" for attempt in check["attempts"]),
+             "attempts": len(check["attempts"])}
+            for model in models for check in model["checks"]]
 
 
 def _tag_digests(tags: list) -> dict[str, str]:
@@ -54,10 +72,13 @@ def _print_table(models: list[dict], checks: tuple[str, ...]) -> None:
 def _run(args: argparse.Namespace) -> int:
     try:
         settings = config.load()
+        openai = args.openai_endpoint is not None
         overrides = {
             key: getattr(args, key) for key in ("repeats", "results_dir", "context_length")
             if getattr(args, key) is not None
         }
+        if openai and args.repeats is None:
+            overrides["repeats"] = 1
         settings = replace(settings, **overrides)
         if settings.repeats < 1:
             raise ValueError("repeats must be a positive integer")
@@ -65,6 +86,13 @@ def _run(args: argparse.Namespace) -> int:
             raise ValueError("context_length must be a positive integer")
         if not settings.results_dir:
             raise ValueError("results_dir must be a nonempty path")
+        if args.api_key_env and not openai:
+            raise ValueError("--api-key-env requires --openai-endpoint")
+        if args.summary_json and args.ollama is not None:
+            raise ValueError("--summary-json requires --endpoint or --openai-endpoint")
+        models = tuple(dict.fromkeys([*(args.models or ()), *(args.model or ())]))
+        if not models and not openai:
+            raise ValueError("--models is required")
         if args.hermes and args.ollama is None:
             raise ValueError("--hermes requires --ollama")
         defaults = (*CHECKS, "B6") if args.hermes else tuple(CHECKS)
@@ -78,38 +106,56 @@ def _run(args: argparse.Namespace) -> int:
             raise ValueError("B6 needs context_length of at least 64000, the Hermes minimum")
 
         if args.ollama is not None:
-            return managed.run(args.ollama, args.models, checks, settings,
+            return managed.run(args.ollama, models, checks, settings,
                                hermes=args.hermes, dry_run=args.dry_run)
         if args.dry_run:
             raise ValueError("--dry-run requires --ollama")
-        _, target = loopback_url(args.endpoint)
-        if target != "/" or "?" in args.endpoint or "#" in args.endpoint:
-            raise ValueError("the endpoint must be a base URL with no path, query, or fragment")
-        endpoint = args.endpoint.rstrip("/")
-        version = _get(endpoint, "/api/version", settings).get("version")
-        if not isinstance(version, str) or not version:
-            raise ValueError("/api/version: expected a version string")
-        tags = _get(endpoint, "/api/tags", settings).get("models")
-        if not isinstance(tags, list):
-            raise ValueError("/api/tags: expected a models array")
-        digests = _tag_digests(tags)
+        if openai:
+            # No Ollama steps: no /api/version, /api/tags or thinking detection.
+            kind, endpoint, version, digests, headers = "openai", args.openai_endpoint.rstrip("/"), None, {}, None
+            root = _openai_root(args.openai_endpoint)
+            if args.api_key_env:
+                key = os.environ.get(args.api_key_env)
+                if not key:
+                    raise ValueError(f"environment variable {args.api_key_env} is not set")
+                headers = {"Authorization": f"Bearer {key}"}
+            if not models:
+                listed = _get(root, "/v1/models", settings, headers).get("data")
+                models = tuple(dict.fromkeys(item["id"] for item in listed or []
+                                             if isinstance(item, dict) and isinstance(item.get("id"), str)))
+                if not models:
+                    raise ValueError("/v1/models: expected a data array with model ids")
+        else:
+            kind, headers = "ollama", None
+            _, target = loopback_url(args.endpoint)
+            if target != "/" or "?" in args.endpoint or "#" in args.endpoint:
+                raise ValueError("the endpoint must be a base URL with no path, query, or fragment")
+            endpoint = root = args.endpoint.rstrip("/")
+            version = _get(endpoint, "/api/version", settings).get("version")
+            if not isinstance(version, str) or not version:
+                raise ValueError("/api/version: expected a version string")
+            tags = _get(endpoint, "/api/tags", settings).get("models")
+            if not isinstance(tags, list):
+                raise ValueError("/api/tags: expected a models array")
+            digests = _tag_digests(tags)
     except (ValueError, OSError) as error:
         print(f"canary: {error}", file=sys.stderr)
         return 2
 
-    models = []
+    models_run = []
     all_pass = True
-    for name in args.models:
-        thinking = name in settings.thinking_models
-        records = run_checks(endpoint, name, checks, settings, thinking=thinking)
+    for name in models:
+        thinking = name in settings.thinking_models and not openai
+        records = run_checks(root, name, checks, settings, thinking=thinking, secret_headers=headers)
         all_pass = all_pass and all(record["outcome"] == "pass" for record in records)
-        models.append({"name": name, "digest": digests.get(name), "thinking": thinking, "checks": records})
+        models_run.append({"name": name, "digest": digests.get(name), "thinking": thinking, "checks": records})
 
     result = {
         "schema_version": 1,
         "canary_version": __version__,
         "host": results.host_metadata(),
         "endpoint": endpoint,
+        "endpoint_kind": kind,
         "runtime_version": version,
         "settings": {
             "repeats": settings.repeats,
@@ -119,15 +165,18 @@ def _run(args: argparse.Namespace) -> int:
             "thinking_models": settings.thinking_models,
             "checks": checks,
         },
-        "models": models,
+        "models": models_run,
     }
     try:
         path = results.write(Path(settings.results_dir), result)
+        if args.summary_json:
+            summary = {"endpoint": endpoint, "endpoint_kind": kind, "results": _summary_rows(models_run)}
+            Path(args.summary_json).write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     except OSError as error:
         print(f"canary: could not write results: {error}", file=sys.stderr)
         return 2
 
-    _print_table(models, checks)
+    _print_table(models_run, checks)
     print(f"Results written to {path}")
     return 0 if all_pass else 1
 
@@ -138,11 +187,19 @@ def main(argv: list[str] | None = None) -> int:
     run = commands.add_parser("run", help="run compatibility checks")
     source = run.add_mutually_exclusive_group(required=True)
     source.add_argument("--endpoint", help="base URL of a loopback server")
+    source.add_argument("--openai-endpoint", metavar="URL",
+                        help="loopback base URL of an OpenAI-compatible server, ending in /v1")
     source.add_argument("--ollama", help="last:N or a comma-separated list of Ollama versions")
     run.add_argument("--hermes", help="latest, last:N or a Hermes release tag")
-    run.add_argument("--models", required=True, type=_csv, help="comma-separated model names")
+    run.add_argument("--models", type=_csv, help="comma-separated model names")
+    run.add_argument("--model", action="append", help="one model name, repeatable; with --openai-endpoint the "
+                     "models default to GET /v1/models")
+    run.add_argument("--api-key-env", metavar="NAME",
+                     help="environment variable holding the Bearer key for --openai-endpoint")
+    run.add_argument("--summary-json", metavar="PATH", help="also write a short JSON summary of each check")
     run.add_argument("--checks", type=_csv, help="comma-separated check IDs (default: A1–A6)")
-    run.add_argument("--repeats", type=int, help="attempts per model and check (default: 3)")
+    run.add_argument("--repeats", "--attempts", type=int, dest="repeats",
+                     help="attempts per model and check (default: 3, or 1 with --openai-endpoint)")
     run.add_argument("--results-dir", help="output directory (default: results)")
     run.add_argument("--context-length", type=int,
                      help="managed Ollama context; Layer A needs far less than the B6 default of 65536")

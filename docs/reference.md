@@ -78,6 +78,42 @@ Managed runs cache GitHub release listings for 60 minutes under
 to `gh auth token` when available. Dry runs can reuse a fresh listing and leave
 the cache untouched.
 
+## Your own server
+
+`canary run --endpoint URL --models a,b` tests a server you started yourself.
+The URL is a loopback base URL without a path. Canary reads `/api/version` and
+`/api/tags` from it, so it expects an Ollama server.
+
+`canary run --openai-endpoint URL` tests any server with an OpenAI-compatible
+API. The URL must be a plain HTTP base URL on `127.0.0.1` or `localhost` with
+an explicit port, ending in `/v1`, for example `http://127.0.0.1:3001/v1`.
+Canary skips the Ollama-specific steps: `/api/version`, `/api/tags`, the
+memory guard and thinking detection. Models come from repeated `--model` flags
+or `--models a,b`, and otherwise from `GET /v1/models`. Layer A runs once per
+check by default, and `--attempts N` (the same option as `--repeats`) changes
+that.
+
+`--api-key-env NAME` sends `Authorization: Bearer <value of NAME>` with every
+request. The value comes from the environment. It is not written to the
+results or to the summary, and the recorded requests leave out the header.
+Canary refuses to run when `NAME` is unset or empty.
+
+The result file has the same layout as an `--endpoint` run. It records
+`"endpoint_kind": "openai"` and the URL in `endpoint`, and `runtime_version` is
+`null`. An `--endpoint` run records `"endpoint_kind": "ollama"`. Results from
+`--openai-endpoint` runs are not part of the report or `matrix.json`.
+
+`--summary-json PATH` works with `--endpoint` and `--openai-endpoint` and
+writes one row per model and check:
+
+```json
+{"endpoint": "http://127.0.0.1:3001/v1", "endpoint_kind": "openai",
+ "results": [{"model": "m", "check": "A1", "status": "pass", "passed": 1, "attempts": 1}]}
+```
+
+`status` is `pass`, `fail` or `error`. A check that is `flaky`, `timeout` or
+`fail` in the result file has the status `fail`.
+
 ## Memory safety
 
 A 16 GB Mac mini reset itself while an earlier version ran B6 with a 64K

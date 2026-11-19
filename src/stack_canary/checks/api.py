@@ -184,6 +184,7 @@ def run_attempt(
     deadline_s: float,
     stall_s: float,
     thinking: bool = False,
+    secret_headers: dict[str, str] | None = None,
 ) -> dict:
     if check_id not in CHECKS:
         raise ValueError(f"unknown check {check_id}")
@@ -195,6 +196,7 @@ def run_attempt(
         deadline_s=deadline_s,
         stall_s=stall_s,
         sse=body["stream"],
+        secret_headers=secret_headers,
     )
     reason = _reason(check_id, exchange)
     if reason is None:
@@ -214,13 +216,13 @@ def run_attempt(
     }
 
 
-def run_checks(endpoint, model, checks, settings, *, thinking):
+def run_checks(endpoint, model, checks, settings, *, thinking, secret_headers=None):
     records = []
     for check_id in checks:
         attempts = [
             run_attempt(
                 check_id, endpoint, model, number, thinking=thinking,
-                deadline_s=settings.deadline_s, stall_s=settings.stall_s,
+                deadline_s=settings.deadline_s, stall_s=settings.stall_s, secret_headers=secret_headers,
             )
             for number in range(1, settings.repeats + 1)
         ]
