@@ -12,6 +12,12 @@ def _client(proxy):
     return http.client.HTTPConnection("127.0.0.1", proxy.server_port, timeout=2)
 
 
+def test_servers_start_without_reverse_dns(monkeypatch):
+    monkeypatch.setattr("socket.getfqdn", lambda *args: pytest.fail("reverse DNS lookup"))
+    with running() as upstream, RecordingProxy(upstream.endpoint):
+        pass
+
+
 def test_proxy_relays_stream_before_completion(monkeypatch):
     proceed = Event()
 

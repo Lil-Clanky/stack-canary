@@ -130,13 +130,13 @@ or Canary, case-insensitively. It still compares every LaunchAgent plist.
   watchdog stopped it (now inconclusive instead of `unsupported`). Rerun
   `canary hermes verify v0.23.2` with heavy apps closed.
 - [ ] Add a second agent harness (pi or opencode) next to Hermes.
-- [ ] CI on `macos-latest`: 15 managed-runtime tests time out waiting for the
-  fake Ollama (`readiness_timeout` after 4 s) although the master server in the
-  same test starts. They pass on the local Mac. CI runs on Linux until then.
-  Not the Gatekeeper scan from 2026-11-19: the tests start the fake server as
-  `sys.executable -c ...`, the Python that already runs pytest, so no new
-  executable path is launched. `readiness_timeout` does not include the server
-  log, so the CI failures left no clue; print it on the next macOS attempt.
+- [x] CI on `macos-latest` (fixed 2026-11-19): 15 managed-runtime tests timed
+  out waiting for the fake Ollama (`readiness_timeout` after 4 s). Not the
+  Gatekeeper scan: the fake runs as `sys.executable -c ...`. A probe run with
+  a 60 s limit passed, but every server start took about 35 s while its imports
+  took under 0.1 s. `HTTPServer.server_bind` calls `socket.getfqdn("127.0.0.1")`,
+  a reverse DNS lookup that stalls on GitHub's macOS runners. The fake server
+  and `RecordingProxy` now skip it, and CI runs on Linux and macOS again.
 - [x] Make the repository public and publish the matrix on GitHub Pages
   (2026-11-18).
 - [ ] With approval: add the end-to-end confirmation to ollama/ollama#19694.

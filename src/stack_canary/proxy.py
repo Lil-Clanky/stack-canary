@@ -2,6 +2,7 @@
 
 import http.client
 import socket
+import socketserver
 import threading
 import time
 from contextlib import suppress
@@ -56,6 +57,11 @@ class RecordingProxy(ThreadingHTTPServer):
         self._sockets = set()
         self._closing = False
         super().__init__(("127.0.0.1", 0), _Handler)
+
+    def server_bind(self):
+        # HTTPServer.server_bind does a reverse DNS lookup (socket.getfqdn) that took 35 s on macOS CI.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def get_request(self):
         sock, address = super().get_request()

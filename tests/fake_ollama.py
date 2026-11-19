@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import socketserver
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +35,11 @@ class FakeOllama(ThreadingHTTPServer):
         self.lock = Lock()
         self.chat_requests = 0
         super().__init__(("127.0.0.1", port), Handler)
+
+    def server_bind(self) -> None:
+        # HTTPServer.server_bind does a reverse DNS lookup (socket.getfqdn) that took 35 s on macOS CI.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     @property
     def endpoint(self) -> str:
