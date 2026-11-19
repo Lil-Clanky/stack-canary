@@ -524,6 +524,24 @@ def _markdown(run, versions, names, columns, cells, drafts, output):
     return "\n".join(lines) + "\n"
 
 
+def _matrix_json(runs, cells):
+    # Same cell outcome as MATRIX.md; flaky and timeout count as fail because the cell did not pass.
+    status = {"pass": "pass", "fail": "fail", "flaky": "fail", "timeout": "fail", "error": "error", "n/a": "n/a"}
+    kept = [cell for (_, _, check, _), cell in sorted(cells.items(), key=lambda item: item[0][:3])
+            if check in CHECKS and cell.run.data.get("endpoint_kind") != "openai"]
+    stamps = [cell.run.timestamp for cell in kept] or [runs[-1].timestamp]
+    return json.dumps({
+        "schema": 1,
+        "generated": max(stamps).astimezone(UTC).isoformat(),
+        "cells": [{
+            "ollama": cell.run.version, "model": cell.model["name"], "check": cell.record["check_id"],
+            "status": status[cell.outcome],
+            "passed": sum(1 for item in cell.record.get("attempts") or [] if item.get("outcome") == "pass"),
+            "attempts": len(cell.record.get("attempts") or []),
+        } for cell in kept],
+    }, indent=2) + "\n"
+
+
 def generate(directories=None, output=Path("report/index.html"), repro_dir=Path("repro"), *,
              all_models=False, stable_timestamp=False):
     root = canary_home()
@@ -581,5 +599,6 @@ def generate(directories=None, output=Path("report/index.html"), repro_dir=Path(
     if output.name == "index.html":
         markdown = output.with_name("MATRIX.md")
         _write(markdown, report_scope, _markdown(runs[-1], versions, names, columns, cells, drafts, markdown))
+        _write(output.with_name("matrix.json"), report_scope, _matrix_json(runs, cells))
         _write(output.with_name("matrix.svg"), report_scope, _svg(runs[-1], versions, names, columns, cells))
     return output, len(drafts)

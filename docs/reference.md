@@ -244,16 +244,23 @@ configured channels. It submits real test notifications.
 
 ## Publishing the matrix
 
-`canary report` writes `report/MATRIX.md` and `report/matrix.svg` alongside
-its default HTML output. The Markdown matrix uses one B6 column per Hermes
+`canary report` writes `report/MATRIX.md`, `report/matrix.svg` and
+`report/matrix.json` alongside its default HTML output. The Markdown matrix uses one B6 column per Hermes
 tag, marks runtime regressions and links to repro drafts. The SVG is the same
 matrix as one image, for places that do not allow HTML, such as a README.
+`matrix.json` holds one cell per Ollama version, model and Layer A check, in
+the form `{"schema": 1, "generated": "<ISO 8601>", "cells": [{"ollama":
+"0.40.16", "model": "qwen3.5:0.8b", "check": "A6", "status": "fail",
+"passed": 0, "attempts": 3}]}`. `status` is `pass`, `fail`, `error` or `n/a`.
+It follows the outcome in the Markdown matrix, with `flaky` and `timeout`
+reported as `fail`. `passed` and `attempts` count the recorded attempts.
+B6 cells and results from `--openai-endpoint` runs are not included.
 
 Set `publish_branch = "matrix"` and `publish_gh_user` to your GitHub account
 to enable publishing to the `matrix` branch of your repository. Run
 `canary publish` manually, or let watch publish when configured. The
 publisher uses an orphan worktree at `CANARY_HOME/publish` and pushes only
-the matrix ref. It allows only the three matrix formats, the two summaries
+the matrix ref. It allows only the four matrix formats, the two summaries
 and generated repro drafts. It shortens macOS user paths and refuses to
 push detected credentials, the ntfy topic or the proxy API key. GitHub
 authentication is scoped to the configured account without changing

@@ -13,7 +13,7 @@ from .runtime_ollama import _state_path
 
 REMOTE = report.REPO + ".git"
 URL = report.REPO + "/tree/matrix"
-ARTIFACTS = {"MATRIX.md", "index.html", "matrix.svg", "summary.md", "summary.json"}
+ARTIFACTS = {"MATRIX.md", "index.html", "matrix.svg", "matrix.json", "summary.md", "summary.json"}
 PUSH_ATTEMPTS = 3
 SECRET = re.compile(
     r"(?:\bgithub_pat_[A-Za-z0-9_]+|\bgh[pousr]_[A-Za-z0-9_]+|\bsk-[A-Za-z0-9_-]{12,}"
