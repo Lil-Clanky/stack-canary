@@ -6,6 +6,7 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from . import __version__, config, hermes_verify, maintenance, managed, notifications, publish, report, results, schedule, watch
 from .checks import CHECKS
@@ -47,6 +48,21 @@ def _summary_rows(models: list[dict]) -> list[dict]:
              "passed": sum(attempt["outcome"] == "pass" for attempt in check["attempts"]),
              "attempts": len(check["attempts"])}
             for model in models for check in model["checks"]]
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=".summary-", delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(text)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _tag_digests(tags: list) -> dict[str, str]:
@@ -118,6 +134,8 @@ def _run(args: argparse.Namespace) -> int:
                 key = os.environ.get(args.api_key_env)
                 if not key:
                     raise ValueError(f"environment variable {args.api_key_env} is not set")
+                if any(ord(char) < 32 or ord(char) == 127 for char in key):
+                    raise ValueError(f"environment variable {args.api_key_env} contains control characters")
                 headers = {"Authorization": f"Bearer {key}"}
             if not models:
                 listed = _get(root, "/v1/models", settings, headers).get("data")
@@ -169,12 +187,16 @@ def _run(args: argparse.Namespace) -> int:
     }
     try:
         path = results.write(Path(settings.results_dir), result)
-        if args.summary_json:
-            summary = {"endpoint": endpoint, "endpoint_kind": kind, "results": _summary_rows(models_run)}
-            Path(args.summary_json).write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     except OSError as error:
         print(f"canary: could not write results: {error}", file=sys.stderr)
         return 2
+    if args.summary_json:
+        summary = {"endpoint": endpoint, "endpoint_kind": kind, "results": _summary_rows(models_run)}
+        try:
+            _write_atomic(Path(args.summary_json), json.dumps(summary, indent=2) + "\n")
+        except OSError as error:
+            print(f"canary: could not write summary {args.summary_json}: {error}", file=sys.stderr)
+            return 2
 
     _print_table(models_run, checks)
     print(f"Results written to {path}")

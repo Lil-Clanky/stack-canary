@@ -75,15 +75,14 @@ the model files, so your own Ollama on port 11434 keeps running. After the run,
 an audit checks that your Ollama, its models and your launch agents are
 unchanged. Add `--dry-run` to see what it would download first.
 
-You can also test a server you started yourself, as long as it has an
-OpenAI-compatible API:
+You can also test an Ollama server you started yourself:
 
 ```sh
 canary run --endpoint http://127.0.0.1:8080 --models qwen3.5:0.8b
 ```
 
-For a server that only speaks the OpenAI API, use `--openai-endpoint` with a
-loopback base URL ending in `/v1`. The models come from `/v1/models` unless you
+For a server with an OpenAI-compatible API that is not Ollama, use
+`--openai-endpoint` with a loopback base URL ending in `/v1`. The models come from `/v1/models` unless you
 pass `--model`, and `--api-key-env NAME` sends a Bearer key read from the
 environment. See [docs/reference.md](docs/reference.md#your-own-server).
 

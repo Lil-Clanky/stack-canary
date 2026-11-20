@@ -86,7 +86,8 @@ The URL is a loopback base URL without a path. Canary reads `/api/version` and
 
 `canary run --openai-endpoint URL` tests any server with an OpenAI-compatible
 API. The URL must be a plain HTTP base URL on `127.0.0.1` or `localhost` with
-an explicit port, ending in `/v1`, for example `http://127.0.0.1:3001/v1`.
+an explicit port other than 9119, 9120 or 11434, ending in `/v1`, for example
+`http://127.0.0.1:3001/v1`.
 Canary skips the Ollama-specific steps: `/api/version`, `/api/tags`, the
 memory guard and thinking detection. Models come from repeated `--model` flags
 or `--models a,b`, and otherwise from `GET /v1/models`. Layer A runs once per
@@ -96,7 +97,7 @@ that.
 `--api-key-env NAME` sends `Authorization: Bearer <value of NAME>` with every
 request. The value comes from the environment. It is not written to the
 results or to the summary, and the recorded requests leave out the header.
-Canary refuses to run when `NAME` is unset or empty.
+Canary refuses to run when `NAME` is unset, empty or holds control characters.
 
 The result file has the same layout as an `--endpoint` run. It records
 `"endpoint_kind": "openai"` and the URL in `endpoint`, and `runtime_version` is
@@ -112,7 +113,12 @@ writes one row per model and check:
 ```
 
 `status` is `pass`, `fail` or `error`. A check that is `flaky`, `timeout` or
-`fail` in the result file has the status `fail`.
+`fail` in the result file has the status `fail`, and so does a check that does
+not apply, such as a tool check on a model without tool support. The summary
+has no separate value for that case, because a consumer that picks models for
+tool calls should avoid such a model in the same way as one whose tool calls
+break. The result file keeps the `n/a` outcome. The summary is written to a
+temporary file in the same folder and then moved into place.
 
 ## Memory safety
 
@@ -281,8 +287,8 @@ configured channels. It submits real test notifications.
 ## Publishing the matrix
 
 `canary report` writes `report/MATRIX.md`, `report/matrix.svg` and
-`report/matrix.json` alongside its default HTML output. The Markdown matrix uses one B6 column per Hermes
-tag, marks runtime regressions and links to repro drafts. The SVG is the same
+`report/matrix.json` alongside its default HTML output. The Markdown matrix
+uses one B6 column per Hermes tag, marks runtime regressions and links to repro drafts. The SVG is the same
 matrix as one image, for places that do not allow HTML, such as a README.
 `matrix.json` holds one cell per Ollama version, model and Layer A check, in
 the form `{"schema": 1, "generated": "<ISO 8601>", "cells": [{"ollama":

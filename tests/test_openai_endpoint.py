@@ -45,7 +45,7 @@ def test_model_flag_skips_discovery_and_attempts_flag_applies():
     assert [model["name"] for model in result["models"]] == ["only"]
 
 
-def test_api_key_is_sent_and_never_written(monkeypatch):
+def test_api_key_is_sent_and_never_written(monkeypatch, capsys):
     monkeypatch.setenv("FIXTURE_KEY", fake.KEY)
     summary = Path("summary.json")
     with fake.running() as server:
@@ -53,8 +53,31 @@ def test_api_key_is_sent_and_never_written(monkeypatch):
                 "--checks", "A1,A5", "--summary-json", str(summary)]
         assert main(args) == 0
         assert server.auth_headers and set(server.auth_headers) == {"Bearer " + fake.KEY}
-    path, _ = _result()
-    assert fake.KEY not in path.read_text(encoding="utf-8") + summary.read_text(encoding="utf-8")
+    path, result = _result()
+    output = capsys.readouterr()
+    recorded = [attempt["request"]["headers"] for model in result["models"]
+                for check in model["checks"] for attempt in check["attempts"]]
+    assert recorded and all("Authorization" not in headers for headers in recorded)
+    for text in (path.read_text(encoding="utf-8"), summary.read_text(encoding="utf-8"), output.out, output.err):
+        assert fake.KEY not in text
+
+
+def test_key_with_control_characters_is_refused_by_name(monkeypatch, capsys):
+    monkeypatch.setenv("FIXTURE_KEY", "sk-bad\nkey")
+    with fake.running() as server:
+        assert main(["run", "--openai-endpoint", server.endpoint, "--api-key-env", "FIXTURE_KEY"]) == 2
+        assert server.auth_headers == []
+    error = capsys.readouterr().err
+    assert "FIXTURE_KEY" in error and "control characters" in error and "sk-bad" not in error
+
+
+def test_unwritable_summary_names_the_file_and_leaves_no_temporary(capsys):
+    with fake.running() as server:
+        assert main(["run", "--openai-endpoint", server.endpoint, "--model", "m1", "--checks", "A1",
+                     "--summary-json", "missing/dir/summary.json"]) == 2
+    error = capsys.readouterr().err
+    assert "could not write summary missing/dir/summary.json" in error and "No such file" in error
+    assert not Path("missing").exists()
 
 
 def test_unset_api_key_variable_is_refused(monkeypatch, capsys):
