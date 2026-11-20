@@ -1,5 +1,5 @@
 {
-  "timestamp": "20261119T033003.635947Z",
+  "timestamp": "20261120T033000.709888Z",
   "models": [
     "llama3.2:3b",
     "granite4:3b-h",
@@ -10,39 +10,20 @@
     "0.40.16",
     "0.40.15"
   ],
-  "ran": [
-    "0.40.16",
-    "0.40.15"
-  ],
+  "ran": [],
   "regressions": [],
   "infra_errors": [
     {
-      "version": "0.40.16",
-      "code": "readiness_timeout",
-      "message": "Ollama did not become ready in 60s",
-      "http_status": null,
-      "body_excerpt": null,
-      "stage": "prepare_master"
-    },
-    {
-      "version": "0.40.15",
-      "code": "readiness_timeout",
-      "message": "Ollama did not become ready in 60s",
-      "http_status": null,
-      "body_excerpt": null,
-      "stage": "prepare_master"
-    },
-    {
-      "message": "Publish: publish git operation failed (exit 128)"
+      "message": "start Ollama 0.40.16 master refused: swap use 4.5 GiB exceeds max_swap_gb = 4"
     }
   ],
   "isolation_errors": [],
   "unverified_hermes": [],
   "new_unverified_hermes": [],
   "failed_hermes": [],
-  "lowest_free_bytes": 251297685504,
-  "peak_swap_used_bytes": 1783627776,
-  "duration_s": 134.55004154201015,
+  "lowest_free_bytes": 244439101440,
+  "peak_swap_used_bytes": 4838328893,
+  "duration_s": 58.28187124998658,
   "exit_code": 2,
   "status": "error"
 }
