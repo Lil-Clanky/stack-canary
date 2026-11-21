@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="300" viewBox="0 0 880 300" role="img" aria-labelledby="title desc">
+  <title id="title">Same checks, different Ollama releases</title>
+  <desc id="desc">Stack Canary runs the same model and checks on an earlier and a later Ollama release, then compares the results to show what changed.</desc>
+  <rect width="880" height="300" rx="20" fill="#0b1120"/>
+  <g font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+    <text x="40" y="57" fill="#f8fafc" font-size="32" font-weight="700" letter-spacing="-0.7">Same checks, different Ollama releases</text>
+    <g fill="none" stroke="#71829a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M248 161h25m0 0v-36h30m-30 36v36h30"/>
+      <path d="M295 120l8 5-8 5m0 62 8 5-8 5"/>
+      <path d="M558 125h28v36m-28 36h28v-36h35m-8-5 8 5-8 5"/>
+    </g>
+    <g fill="#141f33" stroke="#364860">
+      <rect x="40" y="121" width="208" height="80" rx="12"/>
+      <rect x="311" y="99" width="247" height="52" rx="10"/>
+      <rect x="311" y="171" width="247" height="52" rx="10"/>
+    </g>
+    <rect x="628" y="121" width="212" height="80" rx="12" fill="#facc15"/>
+    <g font-size="21" font-weight="650" text-anchor="middle" fill="#f8fafc">
+      <text x="144" y="153">Same model</text>
+      <text x="144" y="181">Same checks</text>
+      <text x="434.5" y="132">Earlier release</text>
+      <text x="434.5" y="204">Later release</text>
+      <text x="734" y="168" fill="#0b1120">Compare results</text>
+    </g>
+    <path d="M40 246H840" stroke="#364860"/>
+    <text x="40" y="275" fill="#b6c4d8" font-size="19">See which tested release changed a result.</text>
+  </g>
+</svg>

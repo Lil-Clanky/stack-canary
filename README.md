@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://lil-clanky.github.io/stack-canary/"><img src="assets/banner.svg" width="100%" alt="Stack Canary"></a>
+  <a href="https://lil-clanky.github.io/stack-canary/"><img src="assets/banner.webp" width="100%" alt="Stack Canary: a canary on three stacked stones"></a>
 </p>
 
 <p align="center">
@@ -11,6 +11,8 @@
 Stack Canary runs the same tool-call checks against each Ollama release, for the
 models you use. It shows which release changed a result and writes a `curl`
 command that reproduces it.
+
+![The same model and checks run on two Ollama releases, then Stack Canary compares their results.](assets/compare-releases.svg)
 
 ## Example
 
@@ -32,6 +34,8 @@ There is no error and `finish_reason` is `tool_calls`, so an agent would write
 the changed line to disk. Ollama's Qwen 3.5 parser reads `<T=any>` as an XML tag
 with an attribute. Check A6 tests for this.
 
+![Check A6 example. Ollama 0.40.16 returned a changed write_file argument while reporting finish_reason: tool_calls.](assets/tool-call-regression.svg)
+
 ## Latest run
 
 <p align="center">
@@ -42,6 +46,8 @@ The image is updated after each run. The [live page](https://lil-clanky.github.i
 has the details of every attempt and the repro commands.
 
 ## Checks
+
+![Coverage of chat, streamed responses, tool calls and tool results, exact write_file arguments, and files written by Hermes.](assets/check-coverage.svg)
 
 | | Sends | Passes when |
 | --- | --- | --- |

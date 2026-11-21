@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="311" viewBox="0 0 880 311" role="img" aria-labelledby="title desc">
+  <title id="title">What Stack Canary checks</title>
+  <desc id="desc">A1 checks a plain reply and A2 a streamed reply. A3 checks a tool call, A4 a streamed tool call, and A5 that the model uses a tool result. A6 checks the exact write_file argument. B6 verifies the file Hermes writes. Each check runs three times per model.</desc>
+  <rect width="880" height="311" rx="20" fill="#0b1120"/>
+  <g font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+    <text x="40" y="57" fill="#f8fafc" font-size="32" font-weight="700" letter-spacing="-0.7">What Stack Canary checks</text>
+    <path d="M40 82H840M40 256H840M283 102V234M558 102V234" stroke="#364860"/>
+    <g fill="#f8fafc" font-size="23" font-weight="700">
+      <text x="40" y="119">Chat</text>
+      <text x="306" y="119">Tool calls</text>
+      <text x="581" y="119">File content</text>
+    </g>
+    <g font-family="Consolas, 'SFMono-Regular', Menlo, monospace" fill="#facc15" font-size="19" font-weight="700">
+      <text x="40" y="159">A1</text>
+      <text x="40" y="195">A2</text>
+      <text x="306" y="159">A3</text>
+      <text x="306" y="195">A4</text>
+      <text x="306" y="231">A5</text>
+      <text x="581" y="159">A6</text>
+      <text x="581" y="195">B6</text>
+    </g>
+    <g fill="#d7e0ee" font-size="20">
+      <text x="77" y="159">Plain reply</text>
+      <text x="77" y="195">Streamed reply</text>
+      <text x="343" y="159">Tool call</text>
+      <text x="343" y="195">Streamed tool call</text>
+      <text x="343" y="231">Uses the tool result</text>
+      <text x="618" y="159">Exact <tspan font-family="Consolas, 'SFMono-Regular', Menlo, monospace" font-size="17">write_file</tspan> argument</text>
+      <text x="618" y="195">File written by Hermes</text>
+    </g>
+    <text x="40" y="286" fill="#b6c4d8" font-size="19">Three runs per check and model.</text>
+  </g>
+</svg>
