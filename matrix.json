@@ -1,0 +1,374 @@
+{
+  "schema": 1,
+  "generated": "2026-11-18T11:21:16.474513+00:00",
+  "cells": [
+    {
+      "ollama": "0.40.15",
+      "model": "granite4:3b-h",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "granite4:3b-h",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "granite4:3b-h",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "granite4:3b-h",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "granite4:3b-h",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "granite4:3b-h",
+      "check": "A6",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A6",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A6",
+      "status": "fail",
+      "passed": 0,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "granite4:3b-h",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "granite4:3b-h",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "granite4:3b-h",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "granite4:3b-h",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "granite4:3b-h",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "granite4:3b-h",
+      "check": "A6",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A6",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A6",
+      "status": "fail",
+      "passed": 0,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.7.1",
+      "model": "llama3.2:3b",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.7.1",
+      "model": "llama3.2:3b",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.7.1",
+      "model": "llama3.2:3b",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.7.1",
+      "model": "llama3.2:3b",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.7.1",
+      "model": "llama3.2:3b",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.8.0",
+      "model": "llama3.2:3b",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.8.0",
+      "model": "llama3.2:3b",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.8.0",
+      "model": "llama3.2:3b",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.8.0",
+      "model": "llama3.2:3b",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.8.0",
+      "model": "llama3.2:3b",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    }
+  ]
+}
