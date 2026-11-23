@@ -4,9 +4,9 @@
 - Ran: none
 - Unverified Hermes: none
 - Failed Hermes verification: none
-- Lowest free disk (bytes): 257944555520
-- Peak swap (bytes): 7929730171
-- Duration (seconds): 7.27
+- Lowest free disk (bytes): 257944563712
+- Peak swap (bytes): 6154941891
+- Duration (seconds): 7.64
 
 ## Regressions
 
@@ -14,7 +14,7 @@
 
 ## Infrastructure errors
 
-- Watch: start Ollama 0.40.16 master refused: swap use 7.4 GiB exceeds max_swap_gb = 4
+- Watch: start Ollama 0.40.16 master refused: macOS memory pressure level 2
 
 ## Isolation errors
 
