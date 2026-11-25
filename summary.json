@@ -1,5 +1,5 @@
 {
-  "timestamp": "20261124T033003.508458Z",
+  "timestamp": "20261125T033004.529326Z",
   "models": [
     "llama3.2:3b",
     "granite4:3b-h",
@@ -7,23 +7,23 @@
   ],
   "hermes_tag": "v0.23.2",
   "selected": [
-    "0.40.17",
-    "0.40.16"
+    "0.40.18",
+    "0.40.17"
   ],
   "ran": [],
   "regressions": [],
   "infra_errors": [
     {
-      "message": "start Ollama 0.40.16 master refused: swap use 6.5 GiB exceeds max_swap_gb = 4"
+      "message": "start Ollama 0.40.16 master refused: swap use 5.9 GiB exceeds max_swap_gb = 4"
     }
   ],
   "isolation_errors": [],
   "unverified_hermes": [],
   "new_unverified_hermes": [],
   "failed_hermes": [],
-  "lowest_free_bytes": 257944489984,
-  "peak_swap_used_bytes": 7003638333,
-  "duration_s": 7.444526124978438,
+  "lowest_free_bytes": 257467162624,
+  "peak_swap_used_bytes": 6380259901,
+  "duration_s": 64.14493679103907,
   "exit_code": 2,
   "status": "error"
 }
