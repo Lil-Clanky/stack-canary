@@ -4,9 +4,9 @@
 - Ran: none
 - Unverified Hermes: none
 - Failed Hermes verification: none
-- Lowest free disk (bytes): 257467162624
-- Peak swap (bytes): 6380259901
-- Duration (seconds): 64.14
+- Lowest free disk (bytes): 257474269184
+- Peak swap (bytes): 5023140413
+- Duration (seconds): 7.90
 
 ## Regressions
 
@@ -14,7 +14,7 @@
 
 ## Infrastructure errors
 
-- Watch: start Ollama 0.40.16 master refused: swap use 5.9 GiB exceeds max_swap_gb = 4
+- Watch: start Ollama 0.40.16 master refused: swap use 4.7 GiB exceeds max_swap_gb = 4
 
 ## Isolation errors
 
