@@ -1,5 +1,5 @@
 {
-  "timestamp": "20261126T033005.715654Z",
+  "timestamp": "20261127T033000.826061Z",
   "models": [
     "llama3.2:3b",
     "granite4:3b-h",
@@ -14,16 +14,16 @@
   "regressions": [],
   "infra_errors": [
     {
-      "message": "start Ollama 0.40.16 master refused: swap use 4.7 GiB exceeds max_swap_gb = 4"
+      "message": "start Ollama 0.40.16 master refused: swap use 4.3 GiB exceeds max_swap_gb = 4"
     }
   ],
   "isolation_errors": [],
   "unverified_hermes": [],
   "new_unverified_hermes": [],
   "failed_hermes": [],
-  "lowest_free_bytes": 257474269184,
-  "peak_swap_used_bytes": 5023140413,
-  "duration_s": 7.898831999977119,
+  "lowest_free_bytes": 257474285568,
+  "peak_swap_used_bytes": 4628414464,
+  "duration_s": 8.481767790974118,
   "exit_code": 2,
   "status": "error"
 }
