@@ -1,5 +1,5 @@
 {
-  "timestamp": "20261127T033000.826061Z",
+  "timestamp": "20261128T033004.053540Z",
   "models": [
     "llama3.2:3b",
     "granite4:3b-h",
@@ -7,23 +7,23 @@
   ],
   "hermes_tag": "v0.23.2",
   "selected": [
-    "0.40.18",
-    "0.40.17"
+    "0.40.19",
+    "0.40.18"
   ],
   "ran": [],
   "regressions": [],
   "infra_errors": [
     {
-      "message": "start Ollama 0.40.16 master refused: swap use 4.3 GiB exceeds max_swap_gb = 4"
+      "message": "start Ollama 0.40.16 master refused: macOS memory pressure level 2"
     }
   ],
   "isolation_errors": [],
   "unverified_hermes": [],
   "new_unverified_hermes": [],
   "failed_hermes": [],
-  "lowest_free_bytes": 257474285568,
-  "peak_swap_used_bytes": 4628414464,
-  "duration_s": 8.481767790974118,
+  "lowest_free_bytes": 256992997376,
+  "peak_swap_used_bytes": 4219008451,
+  "duration_s": 51.19129195797723,
   "exit_code": 2,
   "status": "error"
 }
